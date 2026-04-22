@@ -381,6 +381,7 @@ fn render(app: &App, frame: &mut Frame) {
     }
 
     render_global_notification(app, frame);
+    render_loading_overlay(app, frame);
 }
 
 fn render_global_notification(app: &App, frame: &mut Frame) {
@@ -432,6 +433,40 @@ fn current_notification(app: &App) -> Option<(String, Color)> {
     }
 
     None
+}
+
+fn render_loading_overlay(app: &App, frame: &mut Frame) {
+    if !app.loading {
+        return;
+    }
+
+    let area = frame.area();
+    if area.width < 24 || area.height < 5 {
+        return;
+    }
+
+    let message = app
+        .loading_message
+        .as_deref()
+        .unwrap_or("Working...");
+    let message_width = message.chars().count() as u16;
+    let width = (message_width + 10).clamp(32, area.width.saturating_sub(4));
+    let height = 5;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let overlay_area = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, overlay_area);
+    let overlay = Paragraph::new(message)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Busy ")
+                .border_style(Style::default().fg(Color::Yellow)),
+        );
+    frame.render_widget(overlay, overlay_area);
 }
 
 /// Handle key input
@@ -1728,6 +1763,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                             if let Some(ref mut state) = app.wizard_state {
                                 state.iso_path = Some(selected_path);
                                 state.is_recovery_image = false;
+                                state.sync_auto_launch_default();
                             }
                             app.pop_screen(); // Close file browser
 
@@ -1746,6 +1782,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                             if let Some(ref mut state) = app.wizard_state {
                                 state.iso_path = Some(selected_path);
                                 state.is_recovery_image = true;
+                                state.sync_auto_launch_default();
                             }
                             app.pop_screen();
                             let _ = app.wizard_next_step();
@@ -1761,6 +1798,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                         // Selected a disk file - must be in wizard mode
                         if let Some(ref mut state) = app.wizard_state {
                             state.existing_disk_path = Some(selected_path);
+                            state.sync_auto_launch_default();
                         }
                         app.pop_screen(); // Close file browser, return to disk config step
                     }
@@ -1776,6 +1814,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                         if app.wizard_state.is_some() {
                             if let Some(ref mut state) = app.wizard_state {
                                 state.floppy_path = Some(selected_path);
+                                state.sync_auto_launch_default();
                             }
                             app.pop_screen(); // Close file browser, return to ISO step (don't advance)
                         } else {

@@ -361,6 +361,8 @@ pub struct CreateWizardState {
     pub qemu_config: WizardQemuConfig,
     /// Auto-launch VM after creation
     pub auto_launch: bool,
+    /// Whether the user explicitly changed the auto-launch toggle
+    pub auto_launch_overridden: bool,
     /// Currently focused field index (for navigation)
     pub field_focus: usize,
     /// OS list scroll position - reserved for virtual scrolling
@@ -418,7 +420,8 @@ impl Default for CreateWizardState {
             bios_rom_path: None,
             floppy_path: None,
             qemu_config: WizardQemuConfig::default(),
-            auto_launch: true,
+            auto_launch: false,
+            auto_launch_overridden: false,
             field_focus: 0,
             os_list_scroll: 0,
             os_filter: String::new(),
@@ -436,6 +439,24 @@ impl Default for CreateWizardState {
 }
 
 impl CreateWizardState {
+    /// Whether the current wizard inputs imply something useful to auto-launch.
+    pub fn default_auto_launch_enabled(&self) -> bool {
+        self.use_existing_disk || self.iso_path.is_some() || self.floppy_path.is_some()
+    }
+
+    /// Apply the context-sensitive auto-launch default unless the user already overrode it.
+    pub fn sync_auto_launch_default(&mut self) {
+        if !self.auto_launch_overridden {
+            self.auto_launch = self.default_auto_launch_enabled();
+        }
+    }
+
+    /// Toggle auto-launch and remember that the user made an explicit choice.
+    pub fn toggle_auto_launch(&mut self) {
+        self.auto_launch = !self.auto_launch;
+        self.auto_launch_overridden = true;
+    }
+
     /// Generate folder name from VM display name
     pub fn generate_folder_name(display_name: &str) -> String {
         display_name
@@ -747,6 +768,8 @@ pub struct App {
     pub background_tx: Sender<BackgroundResult>,
     /// Whether a background operation is in progress
     pub loading: bool,
+    /// Message shown while a background operation is running
+    pub loading_message: Option<String>,
     /// Error dialog content (for detailed errors)
     pub error_detail: Option<String>,
     /// Error dialog scroll position
@@ -826,6 +849,17 @@ pub enum BackgroundResult {
     SnapshotCreated { name: String, success: bool, error: Option<String> },
     SnapshotRestored { name: String, success: bool, error: Option<String> },
     SnapshotDeleted { name: String, success: bool, error: Option<String> },
+    VmCreated {
+        vm_name: String,
+        launch_script: Option<PathBuf>,
+        auto_launch: bool,
+        boot_mode: BootMode,
+        error: Option<String>,
+    },
+    VmLaunched {
+        vm_name: String,
+        error: Option<String>,
+    },
     /// Reserved for async snapshot loading
     #[allow(dead_code)]
     SnapshotsLoaded { snapshots: Vec<Snapshot>, error: Option<String> },
@@ -945,6 +979,7 @@ impl App {
             background_rx,
             background_tx,
             loading: false,
+            loading_message: None,
             error_detail: None,
             error_scroll: 0,
             info_scroll: 0,
@@ -1330,6 +1365,18 @@ impl App {
         self.status_time = Some(Instant::now());
     }
 
+    /// Start a loading state with a visible message
+    pub fn start_loading(&mut self, msg: impl Into<String>) {
+        self.loading = true;
+        self.loading_message = Some(msg.into());
+    }
+
+    /// Stop the current loading state
+    pub fn stop_loading(&mut self) {
+        self.loading = false;
+        self.loading_message = None;
+    }
+
     /// Show a detailed error in a scrollable dialog
     pub fn show_error(&mut self, error: impl Into<String>) {
         self.error_detail = Some(error.into());
@@ -1356,7 +1403,7 @@ impl App {
     pub fn check_background_results(&mut self) {
         // Non-blocking check for results
         while let Ok(result) = self.background_rx.try_recv() {
-            self.loading = false;
+            self.stop_loading();
             match result {
                 BackgroundResult::SnapshotCreated { name, success, error } => {
                     if success {
@@ -1388,6 +1435,68 @@ impl App {
                     } else {
                         self.snapshots = snapshots;
                         self.selected_snapshot = 0;
+                    }
+                }
+                BackgroundResult::VmCreated { vm_name, launch_script, auto_launch, boot_mode, error } => {
+                    if let Some(e) = error {
+                        if let Some(ref mut state) = self.wizard_state {
+                            state.error_message = Some(format!("Failed to create VM: {}", e));
+                        } else {
+                            self.set_status(format!("Failed to create VM: {}", e));
+                        }
+                        continue;
+                    }
+
+                    self.cancel_wizard();
+
+                    if let Err(e) = self.refresh_vms() {
+                        self.set_status(format!("VM created but refresh failed: {}", e));
+                        continue;
+                    }
+
+                    let Some(launch_script) = launch_script else {
+                        self.set_status(format!("VM created: {}", vm_name));
+                        continue;
+                    };
+
+                    let Some(vm_index) = self.vms.iter().position(|vm| vm.launch_script == launch_script) else {
+                        self.set_status(format!("VM created but could not be selected: {}", vm_name));
+                        continue;
+                    };
+
+                    if let Some(visual_idx) = self.visual_order.iter().position(|&filtered_idx| {
+                        self.filtered_indices.get(filtered_idx) == Some(&vm_index)
+                    }) {
+                        self.selected_vm = visual_idx;
+                    }
+
+                    if auto_launch {
+                        if let Some(vm) = self.selected_vm().cloned() {
+                            self.boot_mode = boot_mode;
+                            let options = self.get_launch_options();
+                            let tx = self.background_tx.clone();
+                            let vm_name_clone = vm_name.clone();
+                            self.start_loading(format!("Launching {}...", vm_name));
+
+                            std::thread::spawn(move || {
+                                let result = crate::vm::launch_vm_sync(&vm, &options);
+                                let _ = tx.send(BackgroundResult::VmLaunched {
+                                    vm_name: vm_name_clone,
+                                    error: result.err().map(|e| e.to_string()),
+                                });
+                            });
+                        } else {
+                            self.set_status(format!("VM created but auto-launch could not find {}", vm_name));
+                        }
+                    } else {
+                        self.set_status(format!("VM created: {}", vm_name));
+                    }
+                }
+                BackgroundResult::VmLaunched { vm_name, error } => {
+                    if let Some(e) = error {
+                        self.set_status(format!("VM created but launch failed: {}", e));
+                    } else {
+                        self.set_status(format!("Launched: {}", vm_name));
                     }
                 }
             }
@@ -1667,7 +1776,7 @@ impl App {
     pub fn start_create_wizard(&mut self) {
         self.reset_wizard_port_forward_state();
 
-        let state = CreateWizardState {
+        let mut state = CreateWizardState {
             disk_size_gb: self.config.default_disk_size_gb,
             qemu_config: WizardQemuConfig {
                 memory_mb: self.config.default_memory_mb,
@@ -1678,6 +1787,7 @@ impl App {
             },
             ..CreateWizardState::default()
         };
+        state.sync_auto_launch_default();
 
         self.wizard_state = Some(state);
         self.push_screen(Screen::CreateWizard);

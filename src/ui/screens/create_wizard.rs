@@ -9,10 +9,11 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
+use std::thread;
 
-use crate::app::{App, WizardStep, WizardField, WizardQemuConfig};
+use crate::app::{App, BackgroundResult, WizardStep, WizardField, WizardQemuConfig};
 use crate::metadata::QemuProfileStore;
-use crate::vm::create_vm;
+use crate::vm::{create_vm, BootMode};
 
 const CATEGORY_ORDER: [&str; 11] = [
     "windows",
@@ -43,6 +44,29 @@ enum OsListItem {
         summary: String,
     },
     Custom,
+}
+
+fn auto_launch_label(state: &crate::app::CreateWizardState) -> &'static str {
+    if matches!(auto_launch_boot_mode(state), BootMode::Install) {
+        "Launch VM in install mode after creation"
+    } else {
+        "Launch VM after creation"
+    }
+}
+
+fn auto_launch_boot_mode(state: &crate::app::CreateWizardState) -> BootMode {
+    if let Some(path) = &state.floppy_path {
+        return BootMode::Floppy(path.clone());
+    }
+
+    if let Some(path) = &state.iso_path {
+        if state.is_recovery_image {
+            return BootMode::Recovery(path.clone());
+        }
+        return BootMode::Install;
+    }
+
+    BootMode::Normal
 }
 
 /// Parse a size string with optional suffix (KB, MB, GB, case-insensitive)
@@ -1418,6 +1442,7 @@ fn handle_step_select_iso(app: &mut App, key: KeyEvent) -> Result<()> {
                 if let Some(ref mut state) = app.wizard_state {
                     state.iso_path = None;
                     state.is_recovery_image = false;
+                    state.sync_auto_launch_default();
                 }
                 let _ = app.wizard_next_step();
             }
@@ -1785,6 +1810,7 @@ fn handle_step_configure_disk(app: &mut App, key: KeyEvent) -> Result<()> {
                     0 => {
                         // Toggle disk source mode
                         state.use_existing_disk = !state.use_existing_disk;
+                        state.sync_auto_launch_default();
                     }
                     1 if !state.use_existing_disk => {
                         // Adjust disk size (Create New mode)
@@ -3039,7 +3065,7 @@ fn render_step_confirm(app: &App, frame: &mut Frame, area: Rect) {
         });
     let checkbox = if state.auto_launch { "[x]" } else { "[ ]" };
     let launch_prefix = if launch_selected { "> " } else { "  " };
-    let launch_text = Paragraph::new(format!("{}{} Launch VM in install mode after creation", launch_prefix, checkbox))
+    let launch_text = Paragraph::new(format!("{}{} {}", launch_prefix, checkbox, auto_launch_label(state)))
         .style(if launch_selected {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else {
@@ -3084,7 +3110,7 @@ fn handle_step_confirm(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Char(' ') => {
             if let Some(ref mut state) = app.wizard_state {
                 if state.field_focus == 1 {
-                    state.auto_launch = !state.auto_launch;
+                    state.toggle_auto_launch();
                 }
             }
         }
@@ -3094,83 +3120,37 @@ fn handle_step_confirm(app: &mut App, key: KeyEvent) -> Result<()> {
                 .unwrap_or(false);
             if launch_selected {
                 if let Some(ref mut state) = app.wizard_state {
-                    state.auto_launch = !state.auto_launch;
+                    state.toggle_auto_launch();
                 }
                 return Ok(());
             }
 
-            // Create the VM
-            let (library_path, auto_launch) = {
-                let state = app.wizard_state.as_ref().unwrap();
-                let path = app.config.vm_library_path.clone();
-                let launch = state.auto_launch;
-                (path, launch)
-            };
-
-            // Clone the state for creation
+            let library_path = app.config.vm_library_path.clone();
             let state = app.wizard_state.as_ref().unwrap().clone();
             let vm_name = state.vm_name.clone();
+            let auto_launch = state.auto_launch;
+            let boot_mode = auto_launch_boot_mode(&state);
+            let tx = app.background_tx.clone();
 
-            match create_vm(&library_path, &state) {
-                Ok(created) => {
-                    // Cancel wizard first (closes screens)
-                    app.cancel_wizard();
+            app.start_loading(format!("Creating {}...", vm_name));
 
-                    // Refresh VM list to include the new VM
-                    match app.refresh_vms() {
-                        Ok(()) => {
-                            app.set_status(format!("VM created: {}", vm_name));
-                        }
-                        Err(e) => {
-                            app.set_status(format!("VM created but refresh failed: {}", e));
-                        }
-                    }
+            thread::spawn(move || {
+                let result = create_vm(&library_path, &state);
+                let (launch_script, error) = match result {
+                    Ok(created) => (Some(created.launch_script), None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
 
-                    // If auto_launch is enabled, find and launch the new VM
-                    if auto_launch {
-                        // Find the newly created VM and select it
-                        if let Some(idx) = app.vms.iter().position(|vm| {
-                            vm.launch_script == created.launch_script
-                        }) {
-                            // Find in visual order
-                            if let Some(visual_idx) = app.visual_order.iter().position(|&filtered_idx| {
-                                app.filtered_indices.get(filtered_idx) == Some(&idx)
-                            }) {
-                                app.selected_vm = visual_idx;
-
-                                // Set boot mode to install
-                                app.boot_mode = crate::vm::BootMode::Install;
-
-                                // Launch the VM
-                                match launch_created_vm(app) {
-                                    Ok(()) => {
-                                        app.set_status(format!("Launched: {}", vm_name));
-                                    }
-                                    Err(e) => {
-                                        app.set_status(format!("VM created but launch failed: {}", e));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    if let Some(ref mut state) = app.wizard_state {
-                        state.error_message = Some(format!("Failed to create VM: {}", e));
-                    }
-                }
-            }
+                let _ = tx.send(BackgroundResult::VmCreated {
+                    vm_name,
+                    launch_script,
+                    auto_launch,
+                    boot_mode,
+                    error,
+                });
+            });
         }
         _ => {}
-    }
-    Ok(())
-}
-
-/// Launch a newly created VM
-fn launch_created_vm(app: &mut App) -> Result<()> {
-    if let Some(vm) = app.selected_vm() {
-        let options = app.get_launch_options();
-        crate::vm::launch_vm_sync(vm, &options)?;
     }
     Ok(())
 }
