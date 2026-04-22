@@ -128,6 +128,7 @@ pub struct NetworkCapabilities {
     pub bridge_helper_path: Option<PathBuf>,
     pub bridge_helper_configured: bool,
     pub system_bridges: Vec<String>,
+    pub allowed_bridges: Vec<String>,
 }
 
 /// Detect all available networking capabilities
@@ -139,12 +140,18 @@ pub fn detect_network_capabilities() -> NetworkCapabilities {
         .map(|p| is_bridge_helper_configured(p))
         .unwrap_or(false);
     let system_bridges = list_system_bridges();
+    let allowed_bridges = if bridge_helper_configured {
+        list_allowed_bridges(&system_bridges)
+    } else {
+        Vec::new()
+    };
 
     NetworkCapabilities {
         passt_available,
         bridge_helper_path,
         bridge_helper_configured,
         system_bridges,
+        allowed_bridges,
     }
 }
 
@@ -223,4 +230,59 @@ fn list_system_bridges() -> Vec<String> {
         }
     }
     bridges
+}
+
+fn list_allowed_bridges(system_bridges: &[String]) -> Vec<String> {
+    let bridge_conf = match std::fs::read_to_string("/etc/qemu/bridge.conf") {
+        Ok(content) => content,
+        Err(_) => return Vec::new(),
+    };
+
+    parse_allowed_bridges(&bridge_conf, system_bridges)
+}
+
+fn parse_allowed_bridges(bridge_conf: &str, system_bridges: &[String]) -> Vec<String> {
+    let mut allowed = Vec::new();
+    for line in bridge_conf.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("allow ") {
+            let bridge = rest.trim();
+            if bridge == "all" {
+                return system_bridges.to_vec();
+            }
+
+            if system_bridges.iter().any(|candidate| candidate == bridge)
+                && !allowed.iter().any(|candidate| candidate == bridge)
+            {
+                allowed.push(bridge.to_string());
+            }
+        }
+    }
+
+    allowed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_allowed_bridges;
+
+    #[test]
+    fn test_parse_allowed_bridges_filters_to_existing_bridges() {
+        let system_bridges = vec!["virbr0".to_string(), "virbr1".to_string()];
+        let bridge_conf = "# comment\nallow virbr0\nallow virbr2\n";
+
+        let allowed = parse_allowed_bridges(bridge_conf, &system_bridges);
+        assert_eq!(allowed, vec!["virbr0".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_allowed_bridges_supports_allow_all() {
+        let system_bridges = vec!["virbr0".to_string(), "virbr1".to_string()];
+        let allowed = parse_allowed_bridges("allow all\n", &system_bridges);
+        assert_eq!(allowed, system_bridges);
+    }
 }

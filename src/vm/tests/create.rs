@@ -1,5 +1,8 @@
 use super::*;
 use crate::app::CreateWizardState;
+use std::fs;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn test_shell_escape_safe_strings() {
@@ -132,6 +135,46 @@ fn test_generate_network_args_bridge() {
 fn test_generate_network_args_none() {
     let args = generate_network_args("none", "user", None, &[]);
     assert!(args.is_empty());
+}
+
+#[test]
+fn test_update_network_in_script_preserves_case_syntax_and_usb_lines() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let vm_dir = std::env::temp_dir().join(format!("vm-curator-test-{}", unique));
+    fs::create_dir_all(&vm_dir).unwrap();
+
+    let config = WizardQemuConfig::default();
+    let script = generate_launch_script_with_os(
+        "Linux Mint",
+        "linux-mint.qcow2",
+        Some(Path::new("/tmp/linux.iso")),
+        false,
+        &config,
+        Some("linux-mint"),
+        None,
+    );
+    fs::write(vm_dir.join("launch.sh"), script).unwrap();
+
+    update_network_in_script(&vm_dir, "virtio", "bridge", Some("virbr1"), &[]).unwrap();
+
+    let updated = fs::read_to_string(vm_dir.join("launch.sh")).unwrap();
+    assert!(updated.contains("    --cdrom)\n"), "missing --cdrom case:\n{}", updated);
+    assert!(updated.contains("        ;;\n    --cdrom)"), "missing case terminator before --cdrom:\n{}", updated);
+    assert!(updated.contains("-usb"), "USB args should be preserved:\n{}", updated);
+    assert!(updated.contains("-device usb-tablet"), "USB tablet should be preserved:\n{}", updated);
+    assert!(updated.contains("-netdev bridge,id=net0,br=virbr1"), "bridge config should be applied:\n{}", updated);
+
+    let status = Command::new("bash")
+        .arg("-n")
+        .arg(vm_dir.join("launch.sh"))
+        .status()
+        .unwrap();
+    assert!(status.success(), "launch.sh should pass bash -n");
+
+    let _ = fs::remove_dir_all(&vm_dir);
 }
 
 #[test]

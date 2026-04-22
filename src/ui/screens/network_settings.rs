@@ -131,19 +131,19 @@ pub fn render(app: &App, frame: &mut Frame) {
         ]));
 
         // System bridges
-        let bridges_str = if caps.system_bridges.is_empty() {
-            "none found".to_string()
+        let bridges_str = if caps.allowed_bridges.is_empty() {
+            "none allowed".to_string()
         } else {
-            caps.system_bridges.join(", ")
+            caps.allowed_bridges.join(", ")
         };
-        let bridges_color = if caps.system_bridges.is_empty() { Color::Red } else { Color::Green };
+        let bridges_color = if caps.allowed_bridges.is_empty() { Color::Red } else { Color::Green };
         lines.push(Line::from(vec![
-            Span::styled("  Bridges:       ", Style::default().fg(Color::Yellow)),
+            Span::styled("  Allowed:       ", Style::default().fg(Color::Yellow)),
             Span::styled(bridges_str, Style::default().fg(bridges_color)),
         ]));
 
         // Setup guidance if incomplete
-        if caps.bridge_helper_path.is_none() || !caps.bridge_helper_configured || caps.system_bridges.is_empty() {
+        if caps.bridge_helper_path.is_none() || !caps.bridge_helper_configured || caps.allowed_bridges.is_empty() {
             lines.push(Line::from(""));
             lines.push(Line::styled("  Setup needed:", Style::default().fg(Color::Yellow)));
             if caps.bridge_helper_path.is_none() {
@@ -151,6 +151,9 @@ pub fn render(app: &App, frame: &mut Frame) {
             }
             if !caps.bridge_helper_configured {
                 lines.push(Line::styled("    Run: sudo setcap cap_net_admin+ep /usr/lib/qemu/qemu-bridge-helper", Style::default().fg(Color::DarkGray)));
+            }
+            if caps.allowed_bridges.is_empty() {
+                lines.push(Line::styled("    Allow a bridge: add 'allow <bridge>' to /etc/qemu/bridge.conf", Style::default().fg(Color::DarkGray)));
             }
             if caps.system_bridges.is_empty() {
                 lines.push(Line::styled("    Create bridge: sudo ip link add qemubr0 type bridge", Style::default().fg(Color::DarkGray)));
@@ -399,7 +402,7 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> anyhow::Res
         .iter()
         .map(|(id, _)| id.to_string())
         .collect();
-    let system_bridges = app.network_caps.system_bridges.clone();
+    let system_bridges = app.network_caps.allowed_bridges.clone();
     let show_pf = {
         let ns = app.network_settings_state.as_ref().unwrap();
         ns.backend == "user" || ns.backend == "passt"

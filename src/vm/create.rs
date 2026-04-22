@@ -1095,51 +1095,38 @@ pub fn update_network_in_script(
     // Build new network arguments
     let new_net_args = generate_network_args(model, backend, bridge_name, port_forwards);
 
-    // Remove existing network lines and replace
+    // Rewrite networking within each QEMU command block without disturbing the
+    // surrounding shell structure or unrelated QEMU args.
     let mut new_lines = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
     let mut i = 0;
-    let mut replaced = false;
+    let mut saw_qemu_block = false;
 
     while i < lines.len() {
         let line = lines[i];
-        let trimmed = line.trim();
+        if line.contains("qemu-system-") {
+            saw_qemu_block = true;
 
-        // Skip comment lines
-        if trimmed.starts_with('#') {
-            new_lines.push(line.to_string());
-            i += 1;
-            continue;
-        }
-
-        // Check if this line contains network args
-        let is_netdev = trimmed.contains("-netdev ") || trimmed.contains("-net user") || trimmed.contains("-net bridge");
-        let is_net_device = (trimmed.contains("-device ") && trimmed.contains("netdev=net0"))
-            || (trimmed.contains("-device ") && (trimmed.contains("e1000") || trimmed.contains("virtio-net") || trimmed.contains("rtl8139") || trimmed.contains("ne2k_pci") || trimmed.contains("pcnet")) && !trimmed.contains("vga") && !trimmed.contains("audio"));
-
-        if is_netdev || is_net_device {
-            // Skip this line (and continuation lines with backslash)
-            while i < lines.len() && lines[i].trim_end().ends_with('\\') {
+            let mut block = Vec::new();
+            loop {
+                let current = lines[i];
+                let continues = current.trim_end().ends_with('\\');
+                block.push(current.to_string());
                 i += 1;
-            }
-            i += 1; // skip the last line of this group
-
-            // Insert replacement on first network line removal
-            if !replaced {
-                for arg in &new_net_args {
-                    new_lines.push(arg.clone());
+                if !continues || i >= lines.len() {
+                    break;
                 }
-                replaced = true;
             }
+
+            new_lines.extend(rewrite_network_in_qemu_block(&block, &new_net_args));
         } else {
             new_lines.push(line.to_string());
             i += 1;
         }
     }
 
-    // If no network lines were found but we have new args, insert before the last non-empty line
-    if !replaced && !new_net_args.is_empty() {
-        // Find the last continuation line sequence and insert before it
+    // Fallback for legacy scripts without any recognizable qemu command block.
+    if !saw_qemu_block && !new_net_args.is_empty() {
         let insert_pos = new_lines.len().saturating_sub(2);
         for (j, arg) in new_net_args.iter().enumerate() {
             new_lines.insert(insert_pos + j, arg.clone());
@@ -1158,6 +1145,53 @@ pub fn update_network_in_script(
         .with_context(|| format!("Failed to write launch script: {}", script_path.display()))?;
 
     Ok(())
+}
+
+fn rewrite_network_in_qemu_block(block: &[String], new_net_args: &[String]) -> Vec<String> {
+    let mut rewritten = Vec::new();
+    let mut inserted = false;
+    let mut removed_existing = false;
+
+    for line in block {
+        let trimmed = line.trim();
+        let is_netdev = trimmed.contains("-netdev ") || trimmed.contains("-net user") || trimmed.contains("-net bridge");
+        let is_net_device = (trimmed.contains("-device ") && trimmed.contains("netdev=net0"))
+            || (trimmed.contains("-device ")
+                && (trimmed.contains("e1000")
+                    || trimmed.contains("virtio-net")
+                    || trimmed.contains("rtl8139")
+                    || trimmed.contains("ne2k_pci")
+                    || trimmed.contains("pcnet"))
+                && !trimmed.contains("vga")
+                && !trimmed.contains("audio"));
+
+        if is_netdev || is_net_device {
+            if !inserted {
+                rewritten.extend(new_net_args.iter().cloned());
+                inserted = true;
+            }
+            removed_existing = true;
+            continue;
+        }
+
+        rewritten.push(line.clone());
+    }
+
+    if !removed_existing && !new_net_args.is_empty() {
+        let insert_pos = rewritten
+            .iter()
+            .position(|line| {
+                let trimmed = line.trim();
+                trimmed.starts_with("-usb")
+                    || trimmed.starts_with("-rtc ")
+                    || trimmed.starts_with("-monitor ")
+                    || trimmed.starts_with("-serial ")
+            })
+            .unwrap_or_else(|| rewritten.len().saturating_sub(1));
+        rewritten.splice(insert_pos..insert_pos, new_net_args.iter().cloned());
+    }
+
+    rewritten
 }
 
 /// Generate network argument lines for a launch script

@@ -2057,18 +2057,18 @@ fn get_field_notes(app: &App, focus: usize) -> String {
             os_name
         ),
         QemuField::BridgeName => {
-            let bridges = &app.network_caps.system_bridges;
+            let bridges = &app.network_caps.allowed_bridges;
             let bridges_str = if bridges.is_empty() {
-                "No bridges detected on system.".to_string()
+                "No bridge-helper-allowed bridges detected on system.".to_string()
             } else {
-                format!("Available: {}", bridges.join(", "))
+                format!("Allowed: {}", bridges.join(", "))
             };
             format!(
                 "Network bridge for {}.\n\n\
                 {}\n\n\
                 The VM will get its own IP on the bridge network, \
                 providing full LAN access.\n\n\
-                Requires qemu-bridge-helper with proper permissions.",
+                Requires qemu-bridge-helper permissions and an allow rule in /etc/qemu/bridge.conf.",
                 os_name, bridges_str
             )
         },
@@ -2449,7 +2449,7 @@ fn handle_qemu_field_change(app: &mut App, delta: i32) {
         .iter()
         .map(|(id, _)| id.to_string())
         .collect();
-    let system_bridges = app.network_caps.system_bridges.clone();
+    let system_bridges = app.network_caps.allowed_bridges.clone();
     let default_bridge = system_bridges.first().cloned()
         .or_else(|| Some("qemubr0".to_string()));
 

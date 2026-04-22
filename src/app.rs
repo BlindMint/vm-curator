@@ -1023,7 +1023,7 @@ impl App {
             options.push(("passt", "passt - Fast NAT, ping works"));
         }
         if self.network_caps.bridge_helper_path.is_some() {
-            if !self.network_caps.system_bridges.is_empty() && self.network_caps.bridge_helper_configured {
+            if !self.network_caps.allowed_bridges.is_empty() && self.network_caps.bridge_helper_configured {
                 options.push(("bridge", "Bridge - Full network, own IP"));
             } else {
                 options.push(("bridge", "Bridge - Requires one-time setup"));
