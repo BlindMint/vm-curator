@@ -678,8 +678,7 @@ pub fn execute_import(
     disk_action: ImportDiskAction,
 ) -> Result<PathBuf> {
     use crate::vm::create::{
-        create_vm_directory, generate_launch_script_with_os, write_launch_script,
-        write_vm_metadata,
+        create_vm_directory, generate_launch_script_with_os, write_launch_script, write_vm_metadata,
     };
 
     let vm_dir = create_vm_directory(library_path, folder_name)?;
@@ -701,9 +700,8 @@ pub fn execute_import(
 
         match disk_action {
             ImportDiskAction::Symlink => {
-                let abs_source = fs::canonicalize(disk_path).with_context(|| {
-                    format!("Failed to resolve path: {}", disk_path.display())
-                })?;
+                let abs_source = fs::canonicalize(disk_path)
+                    .with_context(|| format!("Failed to resolve path: {}", disk_path.display()))?;
                 unix_fs::symlink(&abs_source, &dest).with_context(|| {
                     format!(
                         "Failed to create symlink from {} to {}",

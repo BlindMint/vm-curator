@@ -647,18 +647,10 @@ fn parse_hostfwd_segment(segment: &str) -> Option<PortForward> {
     };
 
     // Extract host port (last number in host_part after protocol)
-    let host_port: u16 = host_part
-        .rsplit(':')
-        .next()?
-        .parse()
-        .ok()?;
+    let host_port: u16 = host_part.rsplit(':').next()?.parse().ok()?;
 
     // Extract guest port (last number in guest_part)
-    let guest_port: u16 = guest_part
-        .rsplit(':')
-        .next()?
-        .parse()
-        .ok()?;
+    let guest_port: u16 = guest_part.rsplit(':').next()?.parse().ok()?;
 
     Some(PortForward {
         protocol,

@@ -11,7 +11,10 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use crate::app::App;
 use crate::config::Config;
 use crate::fs;
-use crate::hardware::{check_multi_gpu_passthrough_status, check_single_gpu_support, MultiGpuPassthroughStatus, LookingGlassConfig, SingleGpuSupport};
+use crate::hardware::{
+    check_multi_gpu_passthrough_status, check_single_gpu_support, LookingGlassConfig,
+    MultiGpuPassthroughStatus, SingleGpuSupport,
+};
 use crate::vm::single_gpu_scripts::{run_system_setup, SystemSetupResult};
 
 /// GPU passthrough validation result
@@ -24,6 +27,11 @@ pub enum GpuValidationResult {
 /// Settings items that can be configured
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsItem {
+    // Section headers
+    LibraryHeader,
+    DefaultsHeader,
+    BehaviorHeader,
+    AdvancedHeader,
     // General settings
     VmLibraryPath,
     DefaultMemory,
@@ -65,6 +73,10 @@ impl SettingsItem {
     pub fn display_name(&self) -> &'static str {
         match self {
             SettingsItem::VmLibraryPath => "VM Library Path",
+            SettingsItem::LibraryHeader => "Library",
+            SettingsItem::DefaultsHeader => "Creation Defaults",
+            SettingsItem::BehaviorHeader => "Behavior",
+            SettingsItem::AdvancedHeader => "Advanced",
             SettingsItem::DefaultMemory => "Default Memory (MB)",
             SettingsItem::DefaultCpuCores => "Default CPU Cores",
             SettingsItem::DefaultDiskSize => "Default Disk Size (GB)",
@@ -88,6 +100,10 @@ impl SettingsItem {
     /// Get the current value as a string
     pub fn get_value(&self, config: &Config) -> String {
         match self {
+            SettingsItem::LibraryHeader
+            | SettingsItem::DefaultsHeader
+            | SettingsItem::BehaviorHeader
+            | SettingsItem::AdvancedHeader => String::new(),
             SettingsItem::VmLibraryPath => config.vm_library_path.display().to_string(),
             SettingsItem::DefaultMemory => config.default_memory_mb.to_string(),
             SettingsItem::DefaultCpuCores => config.default_cpu_cores.to_string(),
@@ -101,7 +117,9 @@ impl SettingsItem {
             SettingsItem::EnableMultiGpuPassthrough => String::new(), // Radio button, no value display
             SettingsItem::MultiGpuIvshmemSize => config.default_ivshmem_size_mb.to_string(),
             SettingsItem::MultiGpuShowWarnings => bool_to_yes_no(config.show_gpu_warnings),
-            SettingsItem::MultiGpuAutoLaunchLookingGlass => bool_to_yes_no(config.looking_glass_auto_launch),
+            SettingsItem::MultiGpuAutoLaunchLookingGlass => {
+                bool_to_yes_no(config.looking_glass_auto_launch)
+            }
             SettingsItem::EnableSingleGpuPassthrough => String::new(), // Radio button, no value display
             SettingsItem::SingleGpuRunSetup => String::new(), // Action button, no value display
             SettingsItem::SingleGpuAutoTty => bool_to_yes_no(config.single_gpu_auto_tty),
@@ -140,6 +158,13 @@ impl SettingsItem {
     /// Check if this is a section header (not editable)
     pub fn is_header(&self) -> bool {
         matches!(self, SettingsItem::GpuPassthroughHeader)
+            || matches!(
+                self,
+                SettingsItem::LibraryHeader
+                    | SettingsItem::DefaultsHeader
+                    | SettingsItem::BehaviorHeader
+                    | SettingsItem::AdvancedHeader
+            )
     }
 
     /// Check if this is an action button (executes something when pressed)
@@ -159,6 +184,10 @@ impl SettingsItem {
     pub fn help_key(&self) -> &'static str {
         match self {
             SettingsItem::VmLibraryPath => "vm_library_path",
+            SettingsItem::LibraryHeader => "vm_library_path",
+            SettingsItem::DefaultsHeader => "default_memory",
+            SettingsItem::BehaviorHeader => "confirm_before_launch",
+            SettingsItem::AdvancedHeader => "default_display",
             SettingsItem::DefaultMemory => "default_memory",
             SettingsItem::DefaultCpuCores => "default_cpu_cores",
             SettingsItem::DefaultDiskSize => "default_disk_size",
@@ -169,7 +198,9 @@ impl SettingsItem {
             SettingsItem::GpuPassthroughDisabled => "gpu_passthrough_disabled",
             SettingsItem::EnableMultiGpuPassthrough => "enable_multi_gpu_passthrough",
             SettingsItem::MultiGpuIvshmemSize => "multi_gpu_ivshmem_size",
-            SettingsItem::MultiGpuShowWarnings | SettingsItem::SingleGpuShowWarnings => "show_gpu_warnings",
+            SettingsItem::MultiGpuShowWarnings | SettingsItem::SingleGpuShowWarnings => {
+                "show_gpu_warnings"
+            }
             SettingsItem::MultiGpuAutoLaunchLookingGlass => "auto_launch_looking_glass",
             SettingsItem::EnableSingleGpuPassthrough => "enable_single_gpu_passthrough",
             SettingsItem::SingleGpuRunSetup => "single_gpu_run_setup",
@@ -180,6 +211,55 @@ impl SettingsItem {
 
 fn bool_to_yes_no(b: bool) -> String {
     if b { "Yes" } else { "No" }.to_string()
+}
+
+fn ellipsize_left(value: &str, max_len: usize) -> String {
+    if value.chars().count() <= max_len {
+        return value.to_string();
+    }
+    if max_len <= 3 {
+        return ".".repeat(max_len);
+    }
+
+    let tail_len = max_len - 3;
+    let tail: String = value
+        .chars()
+        .rev()
+        .take(tail_len)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("...{}", tail)
+}
+
+fn settings_status_text(
+    area_width: u16,
+    version: &str,
+    key_hints: &str,
+    config_display: &str,
+) -> String {
+    let variants = [
+        format!("v{}  {}  Config: {}", version, key_hints, config_display),
+        format!(
+            "v{}  {}  Config: {}",
+            version,
+            key_hints,
+            ellipsize_left(config_display, 42)
+        ),
+        format!(
+            "{}  Config: {}",
+            key_hints,
+            ellipsize_left(config_display, 34)
+        ),
+        format!("{}  {}", key_hints, ellipsize_left(config_display, 24)),
+        key_hints.to_string(),
+    ];
+
+    variants
+        .into_iter()
+        .find(|candidate| candidate.chars().count() <= area_width as usize)
+        .unwrap_or_else(|| key_hints.to_string())
 }
 
 /// Helper to create a visible item from a settings item
@@ -196,14 +276,18 @@ fn make_visible(item: SettingsItem, indent: usize) -> VisibleItem {
 /// Build the list of visible items based on current config
 fn build_visible_items(config: &Config) -> Vec<VisibleItem> {
     let mut items = vec![
+        make_visible(SettingsItem::LibraryHeader, 0),
         make_visible(SettingsItem::VmLibraryPath, 0),
+        make_visible(SettingsItem::DefaultsHeader, 0),
         make_visible(SettingsItem::DefaultMemory, 0),
         make_visible(SettingsItem::DefaultCpuCores, 0),
         make_visible(SettingsItem::DefaultDiskSize, 0),
         make_visible(SettingsItem::DefaultDisplay, 0),
         make_visible(SettingsItem::DefaultEnableKvm, 0),
     ];
+    items.push(make_visible(SettingsItem::BehaviorHeader, 0));
     items.push(make_visible(SettingsItem::ConfirmBeforeLaunch, 0));
+    items.push(make_visible(SettingsItem::AdvancedHeader, 0));
 
     // GPU Passthrough section
     items.push(make_visible(SettingsItem::GpuPassthroughHeader, 0));
@@ -218,7 +302,10 @@ fn build_visible_items(config: &Config) -> Vec<VisibleItem> {
     if config.enable_multi_gpu_passthrough {
         items.push(make_visible(SettingsItem::MultiGpuIvshmemSize, 2));
         items.push(make_visible(SettingsItem::MultiGpuShowWarnings, 2));
-        items.push(make_visible(SettingsItem::MultiGpuAutoLaunchLookingGlass, 2));
+        items.push(make_visible(
+            SettingsItem::MultiGpuAutoLaunchLookingGlass,
+            2,
+        ));
     }
 
     // Single-GPU option (radio button)
@@ -285,8 +372,8 @@ pub fn render(app: &App, frame: &mut Frame) {
     // Right panel: help text + optional validation
     let right_constraints = if show_validation {
         vec![
-            Constraint::Min(6),      // Help text
-            Constraint::Length(10),  // Validation panel
+            Constraint::Min(6),     // Help text
+            Constraint::Length(10), // Validation panel
         ]
     } else {
         vec![Constraint::Min(6)]
@@ -329,7 +416,7 @@ fn render_settings_list(app: &App, frame: &mut Frame, area: Rect, visible_items:
 
             let line = if vi.is_header {
                 // Section header - no value, just the name with special styling
-                format!("{}--- {} ---", indent_str, name)
+                format!("{}{}:", indent_str, name)
             } else if vi.is_action {
                 // Action button - displayed as clickable action
                 format!("{}{}", indent_str, name)
@@ -339,12 +426,30 @@ fn render_settings_list(app: &App, frame: &mut Frame, area: Rect, visible_items:
                     SettingsItem::GpuPassthroughDisabled => {
                         !app.config.enable_multi_gpu_passthrough && !app.config.single_gpu_enabled
                     }
-                    SettingsItem::EnableMultiGpuPassthrough => app.config.enable_multi_gpu_passthrough,
+                    SettingsItem::EnableMultiGpuPassthrough => {
+                        app.config.enable_multi_gpu_passthrough
+                    }
                     SettingsItem::EnableSingleGpuPassthrough => app.config.single_gpu_enabled,
                     _ => false,
                 };
                 let radio = if is_enabled { "(*)" } else { "( )" };
-                format!("{}{} {}", indent_str, radio, name)
+                let mode_hint = match vi.item {
+                    SettingsItem::GpuPassthroughDisabled => "No passthrough features",
+                    SettingsItem::EnableMultiGpuPassthrough => "Secondary GPU + Looking Glass flow",
+                    SettingsItem::EnableSingleGpuPassthrough => "Primary GPU takeover flow",
+                    _ => "",
+                };
+                format!(
+                    "{}{} {}{}",
+                    indent_str,
+                    radio,
+                    name,
+                    if mode_hint.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!("  [{}]", mode_hint)
+                    }
+                )
             } else {
                 // Normal setting
                 let value = if is_editing {
@@ -363,9 +468,13 @@ fn render_settings_list(app: &App, frame: &mut Frame, area: Rect, visible_items:
             };
 
             let style = if vi.is_header {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
             } else if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else if vi.is_action {
                 // Action buttons are styled like links
                 Style::default().fg(Color::Cyan)
@@ -380,19 +489,29 @@ fn render_settings_list(app: &App, frame: &mut Frame, area: Rect, visible_items:
         })
         .collect();
 
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::NONE));
+    let list = List::new(items).block(Block::default().borders(Borders::NONE));
     frame.render_widget(list, area);
 }
 
 /// Render the contextual help panel
-fn render_help_panel(frame: &mut Frame, area: Rect, current_item: Option<&SettingsItem>, help_store: &crate::metadata::SettingsHelpStore) {
-    let help_key = current_item.map(|item| item.help_key()).unwrap_or("default");
+fn render_help_panel(
+    frame: &mut Frame,
+    area: Rect,
+    current_item: Option<&SettingsItem>,
+    help_store: &crate::metadata::SettingsHelpStore,
+) {
+    let help_key = current_item
+        .map(|item| item.help_key())
+        .unwrap_or("default");
     let (title, description) = help_store.get_or_default(help_key);
 
     let help_block = Block::default()
         .title(format!(" {} ", title))
-        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
@@ -405,7 +524,11 @@ fn render_help_panel(frame: &mut Frame, area: Rect, current_item: Option<&Settin
 }
 
 /// Render the GPU validation panel
-fn render_validation_panel(frame: &mut Frame, area: Rect, validation: &Option<GpuValidationResult>) {
+fn render_validation_panel(
+    frame: &mut Frame,
+    area: Rect,
+    validation: &Option<GpuValidationResult>,
+) {
     let Some(result) = validation else {
         return;
     };
@@ -423,11 +546,19 @@ fn render_validation_panel(frame: &mut Frame, area: Rect, validation: &Option<Gp
 /// Render multi-GPU validation status
 fn render_multi_gpu_validation(frame: &mut Frame, area: Rect, status: &MultiGpuPassthroughStatus) {
     let is_ready = status.is_ready();
-    let border_color = if is_ready { Color::Green } else { Color::Yellow };
+    let border_color = if is_ready {
+        Color::Green
+    } else {
+        Color::Yellow
+    };
 
     let block = Block::default()
         .title(" Multi-GPU Status ")
-        .title_style(Style::default().fg(border_color).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(border_color)
+                .add_modifier(Modifier::BOLD),
+        )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
@@ -438,7 +569,11 @@ fn render_multi_gpu_validation(frame: &mut Frame, area: Rect, status: &MultiGpuP
 
     // IOMMU check
     let iommu_icon = if status.iommu_enabled { "[+]" } else { "[-]" };
-    let iommu_style = if status.iommu_enabled { Color::Green } else { Color::Red };
+    let iommu_style = if status.iommu_enabled {
+        Color::Green
+    } else {
+        Color::Red
+    };
     lines.push(Line::from(vec![
         Span::styled(iommu_icon, Style::default().fg(iommu_style)),
         Span::raw(" IOMMU enabled"),
@@ -446,7 +581,11 @@ fn render_multi_gpu_validation(frame: &mut Frame, area: Rect, status: &MultiGpuP
 
     // VFIO check
     let vfio_icon = if status.vfio_loaded { "[+]" } else { "[-]" };
-    let vfio_style = if status.vfio_loaded { Color::Green } else { Color::Red };
+    let vfio_style = if status.vfio_loaded {
+        Color::Green
+    } else {
+        Color::Red
+    };
     lines.push(Line::from(vec![
         Span::styled(vfio_icon, Style::default().fg(vfio_style)),
         Span::raw(" VFIO modules loaded"),
@@ -481,12 +620,16 @@ fn render_multi_gpu_validation(frame: &mut Frame, area: Rect, status: &MultiGpuP
     if is_ready {
         lines.push(Line::from(Span::styled(
             "Ready for passthrough",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         )));
     } else {
         lines.push(Line::from(Span::styled(
             "Not ready",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )));
         // Show first error as hint
         if let Some(error) = status.errors.first() {
@@ -512,11 +655,19 @@ fn render_multi_gpu_validation(frame: &mut Frame, area: Rect, status: &MultiGpuP
 /// Render single-GPU validation status
 fn render_single_gpu_validation(frame: &mut Frame, area: Rect, support: &SingleGpuSupport) {
     let is_ready = support.is_supported();
-    let border_color = if is_ready { Color::Green } else { Color::Yellow };
+    let border_color = if is_ready {
+        Color::Green
+    } else {
+        Color::Yellow
+    };
 
     let block = Block::default()
         .title(" Single GPU Status ")
-        .title_style(Style::default().fg(border_color).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(border_color)
+                .add_modifier(Modifier::BOLD),
+        )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
@@ -527,7 +678,11 @@ fn render_single_gpu_validation(frame: &mut Frame, area: Rect, support: &SingleG
 
     // IOMMU check
     let iommu_icon = if support.iommu_enabled { "[+]" } else { "[-]" };
-    let iommu_style = if support.iommu_enabled { Color::Green } else { Color::Red };
+    let iommu_style = if support.iommu_enabled {
+        Color::Green
+    } else {
+        Color::Red
+    };
     lines.push(Line::from(vec![
         Span::styled(iommu_icon, Style::default().fg(iommu_style)),
         Span::raw(" IOMMU enabled"),
@@ -535,7 +690,11 @@ fn render_single_gpu_validation(frame: &mut Frame, area: Rect, support: &SingleG
 
     // VFIO check
     let vfio_icon = if support.vfio_available { "[+]" } else { "[-]" };
-    let vfio_style = if support.vfio_available { Color::Green } else { Color::Red };
+    let vfio_style = if support.vfio_available {
+        Color::Green
+    } else {
+        Color::Red
+    };
     lines.push(Line::from(vec![
         Span::styled(vfio_icon, Style::default().fg(vfio_style)),
         Span::raw(" VFIO available"),
@@ -552,7 +711,11 @@ fn render_single_gpu_validation(frame: &mut Frame, area: Rect, support: &SingleG
 
     // Single GPU confirmation (informational - yellow if multiple GPUs detected)
     let single_icon = if support.has_single_gpu { "[+]" } else { "[!]" };
-    let single_style = if support.has_single_gpu { Color::Green } else { Color::Yellow };
+    let single_style = if support.has_single_gpu {
+        Color::Green
+    } else {
+        Color::Yellow
+    };
     let single_text = if support.has_single_gpu {
         " Single GPU confirmed"
     } else {
@@ -579,12 +742,16 @@ fn render_single_gpu_validation(frame: &mut Frame, area: Rect, support: &SingleG
     if is_ready {
         lines.push(Line::from(Span::styled(
             "Ready for passthrough",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         )));
     } else {
         lines.push(Line::from(Span::styled(
             "Not ready",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )));
     }
 
@@ -604,10 +771,19 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, visible_items: &[
 
     // Get help text for current item
     let current_item = visible_items.get(app.settings_selected).map(|vi| &vi.item);
-    let is_header = visible_items.get(app.settings_selected).map(|vi| vi.is_header).unwrap_or(false);
-    let is_radio = visible_items.get(app.settings_selected).map(|vi| vi.is_radio).unwrap_or(false);
+    let is_header = visible_items
+        .get(app.settings_selected)
+        .map(|vi| vi.is_header)
+        .unwrap_or(false);
+    let is_radio = visible_items
+        .get(app.settings_selected)
+        .map(|vi| vi.is_radio)
+        .unwrap_or(false);
 
-    let is_action = visible_items.get(app.settings_selected).map(|vi| vi.is_action).unwrap_or(false);
+    let is_action = visible_items
+        .get(app.settings_selected)
+        .map(|vi| vi.is_action)
+        .unwrap_or(false);
 
     let key_hints = if app.settings_editing {
         "[Enter] Save  [Esc] Cancel"
@@ -625,11 +801,10 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, visible_items: &[
         "[Enter] Edit  [j/k] Navigate  [Esc] Back"
     };
 
-    // Build status line: version | key hints | config path
-    let status_text = format!("v{}  {}  Config: {}", version, key_hints, config_display);
+    let status_text = settings_status_text(area.width, version, key_hints, &config_display);
 
     let status = Paragraph::new(status_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Left);
 
     frame.render_widget(status, area);
@@ -744,18 +919,17 @@ fn toggle_radio(app: &mut App, item: SettingsItem) -> anyhow::Result<()> {
             app.config.enable_multi_gpu_passthrough = true;
             app.config.single_gpu_enabled = false;
             // Run validation
-            app.settings_gpu_validation = Some(
-                GpuValidationResult::MultiGpu(check_multi_gpu_passthrough_status())
-            );
+            app.settings_gpu_validation = Some(GpuValidationResult::MultiGpu(
+                check_multi_gpu_passthrough_status(),
+            ));
         }
         SettingsItem::EnableSingleGpuPassthrough => {
             // Enable single-GPU, disable multi-GPU
             app.config.single_gpu_enabled = true;
             app.config.enable_multi_gpu_passthrough = false;
             // Run validation
-            app.settings_gpu_validation = Some(
-                GpuValidationResult::SingleGpu(check_single_gpu_support())
-            );
+            app.settings_gpu_validation =
+                Some(GpuValidationResult::SingleGpu(check_single_gpu_support()));
         }
         _ => {}
     }
@@ -921,4 +1095,28 @@ fn save_config(app: &mut App) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_status_text_truncates_before_overflow() {
+        let status = settings_status_text(
+            50,
+            "1.2.3",
+            "[Enter] Edit  [Esc] Back",
+            "/home/samurai/.config/vm-foundry/config.toml",
+        );
+
+        assert!(status.chars().count() <= 50);
+        assert!(status.contains("[Enter] Edit"));
+    }
+
+    #[test]
+    fn ellipsize_left_preserves_path_tail() {
+        let value = ellipsize_left("/home/samurai/.config/vm-foundry/config.toml", 20);
+        assert_eq!(value, "...undry/config.toml");
+    }
 }
