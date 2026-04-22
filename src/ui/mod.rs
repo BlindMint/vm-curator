@@ -5,6 +5,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::prelude::*;
 use ratatui::backend::CrosstermBackend;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use regex::Regex;
 use std::io::Stdout;
 use std::time::{Duration, Instant};
@@ -473,6 +474,59 @@ fn render(app: &App, frame: &mut Frame) {
             screens::import_wizard::render(app, frame);
         }
     }
+
+    render_global_notification(app, frame);
+}
+
+fn render_global_notification(app: &App, frame: &mut Frame) {
+    let Some((message, color)) = current_notification(app) else {
+        return;
+    };
+
+    let area = frame.area();
+    if area.width < 8 || area.height < 3 {
+        return;
+    }
+
+    let message_width = message.chars().count() as u16;
+    let desired_width = (message_width + 4).max(24);
+    let max_width = area.width.saturating_sub(2).max(8);
+    let width = desired_width.min(max_width);
+    let x = area.width.saturating_sub(width + 1);
+    let notification_area = Rect::new(x, 0, width, 3.min(area.height));
+
+    frame.render_widget(Clear, notification_area);
+    let notification = Paragraph::new(message)
+        .style(Style::default().fg(color))
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+    frame.render_widget(notification, notification_area);
+}
+
+fn current_notification(app: &App) -> Option<(String, Color)> {
+    if let Some(ref msg) = app.status_message {
+        return Some((msg.clone(), Color::Green));
+    }
+
+    if let Some((id, sent_at)) = app.stopping_vms.iter().next() {
+        let elapsed = sent_at.elapsed().as_secs();
+        let vm_name = app.vms.iter()
+            .find(|vm| &vm.id == id)
+            .map(|vm| vm.display_name())
+            .unwrap_or_else(|| id.clone());
+        let msg = if elapsed >= 10 {
+            format!("Stopping {}... (press x to force stop)", vm_name)
+        } else {
+            format!("Stopping {}...", vm_name)
+        };
+        return Some((msg, Color::Yellow));
+    }
+
+    None
 }
 
 /// Handle key input

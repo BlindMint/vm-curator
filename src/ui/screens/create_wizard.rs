@@ -14,6 +14,37 @@ use crate::app::{App, WizardStep, WizardField, WizardQemuConfig};
 use crate::metadata::QemuProfileStore;
 use crate::vm::create_vm;
 
+const CATEGORY_ORDER: [&str; 11] = [
+    "windows",
+    "linux",
+    "bsd",
+    "unix",
+    "macos",
+    "mobile",
+    "infrastructure",
+    "utilities",
+    "alternative",
+    "retro",
+    "classic-mac",
+];
+
+#[derive(Debug, Clone)]
+enum OsListItem {
+    Category {
+        category: String,
+        display_name: String,
+        has_matches: bool,
+        match_count: usize,
+        expanded: bool,
+    },
+    Os {
+        os_id: String,
+        display_name: String,
+        summary: String,
+    },
+    Custom,
+}
+
 /// Parse a size string with optional suffix (KB, MB, GB, case-insensitive)
 /// Returns value normalized to target unit.
 ///
@@ -55,6 +86,143 @@ fn parse_size_with_suffix(input: &str, target_unit: &str) -> Option<u32> {
     } else {
         None
     }
+}
+
+fn fuzzy_score(query: &str, candidate: &str) -> Option<i64> {
+    if query.is_empty() {
+        return Some(0);
+    }
+
+    let query = query.to_lowercase();
+    let candidate = candidate.to_lowercase();
+
+    if candidate == query {
+        return Some(10_000);
+    }
+    if candidate.starts_with(&query) {
+        return Some(9_000 - candidate.len() as i64);
+    }
+    if let Some(index) = candidate.find(&query) {
+        return Some(8_000 - index as i64 * 10 - candidate.len() as i64);
+    }
+
+    let query_chars: Vec<char> = query.chars().collect();
+    let mut q_idx = 0usize;
+    let mut gap_penalty = 0i64;
+    let mut previous_match = None;
+    let mut first_match = None;
+    let mut consecutive_bonus = 0i64;
+
+    for (idx, ch) in candidate.chars().enumerate() {
+        if q_idx < query_chars.len() && ch == query_chars[q_idx] {
+            if let Some(prev) = previous_match {
+                if idx == prev + 1 {
+                    consecutive_bonus += 12;
+                } else {
+                    gap_penalty += (idx - prev - 1) as i64;
+                }
+            } else {
+                first_match = Some(idx);
+            }
+            previous_match = Some(idx);
+            q_idx += 1;
+        }
+    }
+
+    if q_idx == query_chars.len() {
+        return Some(
+            5_000
+                + consecutive_bonus
+                - gap_penalty * 2
+                - first_match.unwrap_or(0) as i64
+                - candidate.len() as i64,
+        );
+    }
+
+    None
+}
+
+fn profile_match_score(query: &str, os_id: &str, display_name: &str, summary: &str) -> Option<i64> {
+    if query.is_empty() {
+        return Some(0);
+    }
+
+    let mut best = fuzzy_score(query, display_name).map(|score| score + 500);
+    if let Some(score) = fuzzy_score(query, os_id).map(|score| score + 250) {
+        best = Some(best.map_or(score, |current| current.max(score)));
+    }
+    if let Some(score) = fuzzy_score(query, summary) {
+        best = Some(best.map_or(score, |current| current.max(score)));
+    }
+    best
+}
+
+fn build_os_list_items(app: &App, state: &crate::app::CreateWizardState) -> Vec<OsListItem> {
+    let mut items = Vec::new();
+    let filter = state.os_filter.trim();
+    let filter_active = !filter.is_empty();
+
+    for category in &CATEGORY_ORDER {
+        let profiles = app.qemu_profiles.list_by_category(category);
+        if profiles.is_empty() {
+            continue;
+        }
+
+        let mut matches = Vec::new();
+        for (original_idx, (os_id, profile)) in profiles.iter().enumerate() {
+            let summary = profile.summary();
+            if let Some(score) = profile_match_score(filter, os_id, &profile.display_name, &summary) {
+                matches.push((original_idx, score, os_id.to_string(), profile.display_name.to_string(), summary));
+            }
+        }
+
+        if filter_active {
+            matches.sort_by(|a, b| {
+                b.1.cmp(&a.1)
+                    .then_with(|| a.3.to_lowercase().cmp(&b.3.to_lowercase()))
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+        }
+
+        let expanded = if filter_active {
+            true
+        } else {
+            state.is_category_expanded(category)
+        };
+
+        items.push(OsListItem::Category {
+            category: (*category).to_string(),
+            display_name: QemuProfileStore::category_display_name(category).to_string(),
+            has_matches: !matches.is_empty(),
+            match_count: matches.len(),
+            expanded,
+        });
+
+        if expanded {
+            for (_, _, os_id, display_name, summary) in matches {
+                items.push(OsListItem::Os {
+                    os_id,
+                    display_name,
+                    summary,
+                });
+            }
+        }
+    }
+
+    items.push(OsListItem::Custom);
+    items
+}
+
+fn clamp_os_list_selection(state: &mut crate::app::CreateWizardState, item_count: usize) {
+    if item_count == 0 {
+        state.os_list_selected = 0;
+    } else if state.os_list_selected >= item_count {
+        state.os_list_selected = item_count - 1;
+    }
+}
+
+fn first_matching_os_index(items: &[OsListItem]) -> Option<usize> {
+    items.iter().position(|item| matches!(item, OsListItem::Os { .. }))
 }
 
 /// Render the create wizard based on current step
@@ -573,7 +741,9 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
         .margin(1)
         .constraints([
             Constraint::Length(1),   // OS list header
-            Constraint::Min(10),     // OS list
+            Constraint::Length(3),   // Filter field
+            Constraint::Length(1),   // Spacer
+            Constraint::Min(8),      // OS list
             Constraint::Length(1),   // Spacer
             Constraint::Length(3),   // VM Name field
             Constraint::Length(1),   // Error message
@@ -586,8 +756,34 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
         .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
     frame.render_widget(header, chunks[0]);
 
+    let filter_editing = matches!(state.editing_field, Some(WizardField::OsFilter));
+    let filter_border = if filter_editing {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let filter_style = if filter_editing {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let filter_block = Block::default()
+        .title(" OS Filter (/ or Tab) ")
+        .borders(Borders::ALL)
+        .border_style(filter_border);
+    let filter_text = if state.os_filter.is_empty() {
+        Paragraph::new("Type to fuzzy-filter OS entries by name, id, or summary")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(filter_block)
+    } else {
+        Paragraph::new(state.os_filter.as_str())
+            .style(filter_style)
+            .block(filter_block)
+    };
+    frame.render_widget(filter_text, chunks[1]);
+
     // OS list (grouped by category)
-    render_os_list(app, frame, chunks[1]);
+    render_os_list(app, frame, chunks[3]);
 
     // VM Name input (below OS list)
     let name_editing = matches!(state.editing_field, Some(WizardField::VmName));
@@ -616,12 +812,16 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
             .style(name_style)
             .block(name_block)
     };
-    frame.render_widget(name_text, chunks[3]);
+    frame.render_widget(name_text, chunks[5]);
 
     // Set cursor position when editing
     if name_editing {
-        let cursor_x = chunks[3].x + 1 + state.vm_name.len() as u16;
-        let cursor_y = chunks[3].y + 1;
+        let cursor_x = chunks[5].x + 1 + state.vm_name.len() as u16;
+        let cursor_y = chunks[5].y + 1;
+        frame.set_cursor_position((cursor_x, cursor_y));
+    } else if filter_editing {
+        let cursor_x = chunks[1].x + 1 + state.os_filter.len() as u16;
+        let cursor_y = chunks[1].y + 1;
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 
@@ -629,19 +829,21 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
     if let Some(ref error) = state.error_message {
         let error_text = Paragraph::new(error.as_str())
             .style(Style::default().fg(Color::Red));
-        frame.render_widget(error_text, chunks[4]);
+        frame.render_widget(error_text, chunks[6]);
     }
 
     // Help text
-    let help_text = if name_editing {
-        "[Enter] Done editing  [Esc] Cancel"
+    let help_text = if filter_editing {
+        "[Enter] Done editing  [Esc] Clear/exit  [Tab] Next field"
+    } else if name_editing {
+        "[Enter] Done editing  [Esc] Cancel  [Tab] Back to list"
     } else {
-        "[j/k] Select OS  [Tab] Edit name  [Enter] Next  [Esc] Cancel"
+        "[j/k] Select OS  [/] Filter  [Tab] Cycle fields  [Enter] Next  [Esc] Cancel"
     };
     let help = Paragraph::new(help_text)
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[5]);
+    frame.render_widget(help, chunks[7]);
 }
 
 fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
@@ -654,55 +856,50 @@ fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Build the list of items (categories and OSes)
+    let items = build_os_list_items(app, state);
     let mut lines: Vec<Line> = Vec::new();
-    let mut item_index = 0;
+    for (item_index, item) in items.iter().enumerate() {
+        match item {
+            OsListItem::Category {
+                display_name,
+                has_matches,
+                match_count,
+                expanded,
+                ..
+            } => {
+                let is_selected = item_index == state.os_list_selected;
+                let expand_icon = if *expanded { "v" } else { ">" };
+                let category_style = if is_selected {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else if !has_matches && !state.os_filter.is_empty() {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                };
+                let prefix = if is_selected { "> " } else { "  " };
 
-    // Get categories in display order
-    let category_order = ["windows", "linux", "bsd", "unix", "macos", "mobile", "infrastructure", "utilities", "alternative", "retro", "classic-mac"];
-
-    for category in &category_order {
-        let profiles = app.qemu_profiles.list_by_category(category);
-        if profiles.is_empty() {
-            continue;
-        }
-
-        let is_expanded = state.is_category_expanded(category);
-        let is_selected = item_index == state.os_list_selected;
-
-        // Category header
-        let expand_icon = if is_expanded { "v" } else { ">" };
-        let category_name = QemuProfileStore::category_display_name(category);
-        let category_style = if is_selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-        };
-
-        let prefix = if is_selected { "> " } else { "  " };
-        lines.push(Line::from(vec![
-            Span::styled(prefix, category_style),
-            Span::styled(expand_icon, category_style),
-            Span::styled(format!(" {}", category_name), category_style),
-        ]));
-
-        item_index += 1;
-
-        // OS items (if expanded)
-        if is_expanded {
-            for (os_id, profile) in &profiles {
-                // Filter by search query
+                let mut spans = vec![
+                    Span::styled(prefix, category_style),
+                    Span::styled(expand_icon, category_style),
+                    Span::styled(format!(" {}", display_name), category_style),
+                ];
                 if !state.os_filter.is_empty() {
-                    let filter_lower = state.os_filter.to_lowercase();
-                    if !profile.display_name.to_lowercase().contains(&filter_lower)
-                        && !os_id.to_lowercase().contains(&filter_lower)
-                    {
-                        continue;
-                    }
+                    let count_style = if *has_matches {
+                        Style::default().fg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::Red)
+                    };
+                    spans.push(Span::styled(format!("  [{}]", match_count), count_style));
                 }
-
+                lines.push(Line::from(spans));
+            }
+            OsListItem::Os {
+                os_id,
+                display_name,
+                summary,
+            } => {
                 let is_os_selected = item_index == state.os_list_selected;
-                let is_chosen = state.selected_os.as_ref() == Some(*os_id);
+                let is_chosen = state.selected_os.as_ref() == Some(os_id);
 
                 let os_style = if is_os_selected {
                     Style::default().fg(Color::Yellow)
@@ -714,33 +911,29 @@ fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
 
                 let prefix = if is_os_selected { "> " } else { "  " };
                 let chosen_marker = if is_chosen { "*" } else { " " };
-                let summary = profile.summary();
-
                 lines.push(Line::from(vec![
                     Span::styled(prefix, os_style),
                     Span::styled(format!("   {}", chosen_marker), os_style),
-                    Span::styled(profile.display_name.to_string(), os_style),
+                    Span::styled(display_name.to_string(), os_style),
                     Span::styled(format!("  ({})", summary), Style::default().fg(Color::DarkGray)),
                 ]));
-
-                item_index += 1;
+            }
+            OsListItem::Custom => {
+                let is_custom_selected = item_index == state.os_list_selected;
+                let custom_style = if is_custom_selected {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::Magenta)
+                };
+                let prefix = if is_custom_selected { "> " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, custom_style),
+                    Span::styled("   Custom OS...", custom_style),
+                    Span::styled("  (Define your own)", Style::default().fg(Color::DarkGray)),
+                ]));
             }
         }
     }
-
-    // Add "Custom OS" option at the end
-    let is_custom_selected = item_index == state.os_list_selected;
-    let custom_style = if is_custom_selected {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::Magenta)
-    };
-    let prefix = if is_custom_selected { "> " } else { "  " };
-    lines.push(Line::from(vec![
-        Span::styled(prefix, custom_style),
-        Span::styled("   Custom OS...", custom_style),
-        Span::styled("  (Define your own)", Style::default().fg(Color::DarkGray)),
-    ]));
 
     // Calculate scroll offset
     let visible_height = inner.height as usize;
@@ -762,27 +955,72 @@ fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn handle_step_select_os(app: &mut App, key: KeyEvent) -> Result<()> {
-    let editing_name = app.wizard_state.as_ref()
-        .map(|s| matches!(s.editing_field, Some(WizardField::VmName)))
-        .unwrap_or(false);
+    let editing_field = app.wizard_state.as_ref()
+        .and_then(|s| s.editing_field.clone());
 
-    if editing_name {
-        // Text input mode for VM name
+    if let Some(field) = editing_field {
         match key.code {
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Tab => {
+            KeyCode::Esc => {
+                if let Some(ref mut state) = app.wizard_state {
+                    match field {
+                        WizardField::OsFilter if !state.os_filter.is_empty() => {
+                            state.os_filter.clear();
+                        }
+                        WizardField::VmName => {
+                            state.editing_field = None;
+                            state.update_folder_name(&app.config.vm_library_path);
+                        }
+                        _ => {
+                            state.editing_field = None;
+                        }
+                    }
+                }
+                if matches!(field, WizardField::OsFilter) {
+                    sync_os_filter_selection(app, true);
+                }
+            }
+            KeyCode::Enter => {
                 if let Some(ref mut state) = app.wizard_state {
                     state.editing_field = None;
-                    state.update_folder_name(&app.config.vm_library_path);
+                    if matches!(field, WizardField::VmName) {
+                        state.update_folder_name(&app.config.vm_library_path);
+                    }
                 }
+            }
+            KeyCode::Tab => {
+                cycle_select_os_focus(app, false);
+            }
+            KeyCode::BackTab => {
+                cycle_select_os_focus(app, true);
             }
             KeyCode::Char(c) => {
                 if let Some(ref mut state) = app.wizard_state {
-                    state.vm_name.push(c);
+                    match field {
+                        WizardField::VmName => state.vm_name.push(c),
+                        WizardField::OsFilter => {
+                            state.os_filter.push(c);
+                        }
+                        _ => {}
+                    }
+                }
+                if matches!(field, WizardField::OsFilter) {
+                    sync_os_filter_selection(app, true);
                 }
             }
             KeyCode::Backspace => {
                 if let Some(ref mut state) = app.wizard_state {
-                    state.vm_name.pop();
+                    match field {
+                        WizardField::VmName => {
+                            state.vm_name.pop();
+                        }
+                        WizardField::OsFilter => {
+                            state.os_filter.pop();
+                        }
+                        _ => {}
+                    }
+                }
+                if matches!(field, WizardField::OsFilter) {
+                    sync_os_filter_selection(app, true);
                 }
             }
             _ => {}
@@ -793,11 +1031,16 @@ fn handle_step_select_os(app: &mut App, key: KeyEvent) -> Result<()> {
             KeyCode::Esc => {
                 app.cancel_wizard();
             }
-            KeyCode::Tab => {
-                // Toggle to name editing
+            KeyCode::Char('/') => {
                 if let Some(ref mut state) = app.wizard_state {
-                    state.editing_field = Some(WizardField::VmName);
+                    state.editing_field = Some(WizardField::OsFilter);
                 }
+            }
+            KeyCode::Tab => {
+                cycle_select_os_focus(app, false);
+            }
+            KeyCode::BackTab => {
+                cycle_select_os_focus(app, true);
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 // Count total items first (immutable borrow)
@@ -833,92 +1076,20 @@ fn handle_step_select_os(app: &mut App, key: KeyEvent) -> Result<()> {
 /// Count total items in the OS list (categories + visible OSes + custom)
 fn count_os_list_items(app: &App) -> usize {
     let state = app.wizard_state.as_ref().unwrap();
-    let category_order = ["windows", "linux", "bsd", "unix", "macos", "mobile", "infrastructure", "utilities", "alternative", "retro", "classic-mac"];
-
-    let mut count = 0;
-    for category in &category_order {
-        let profiles = app.qemu_profiles.list_by_category(category);
-        if profiles.is_empty() {
-            continue;
-        }
-        count += 1; // Category header
-        if state.is_category_expanded(category) {
-            // Count visible profiles (with filter)
-            for (os_id, profile) in &profiles {
-                if !state.os_filter.is_empty() {
-                    let filter_lower = state.os_filter.to_lowercase();
-                    if !profile.display_name.to_lowercase().contains(&filter_lower)
-                        && !os_id.to_lowercase().contains(&filter_lower)
-                    {
-                        continue;
-                    }
-                }
-                count += 1;
-            }
-        }
-    }
-    count += 1; // Custom OS option
-    count
+    build_os_list_items(app, state).len()
 }
 
 /// Handle action on OS list item (space to toggle, enter to select and proceed)
 fn handle_os_list_action(app: &mut App, proceed: bool) {
-    // First, collect all the information we need without holding borrows
     let Some(ref state) = app.wizard_state else {
         return;
     };
-    let selected = state.os_list_selected;
-    let os_filter = state.os_filter.clone();
-    let expanded_categories: Vec<String> = state.expanded_categories.clone();
-
-    let category_order = ["windows", "linux", "bsd", "unix", "macos", "mobile", "infrastructure", "utilities", "alternative", "retro", "classic-mac"];
-
-    let mut item_index = 0;
-    let mut action: Option<OsListAction> = None;
-
-    for category in &category_order {
-        let profiles = app.qemu_profiles.list_by_category(category);
-        if profiles.is_empty() {
-            continue;
-        }
-
-        // Category header
-        if item_index == selected {
-            action = Some(OsListAction::ToggleCategory(category.to_string()));
-            break;
-        }
-        item_index += 1;
-
-        // OS items (if expanded)
-        let is_expanded = expanded_categories.iter().any(|c| c == *category);
-        if is_expanded {
-            for (os_id, profile) in &profiles {
-                if !os_filter.is_empty() {
-                    let filter_lower = os_filter.to_lowercase();
-                    if !profile.display_name.to_lowercase().contains(&filter_lower)
-                        && !os_id.to_lowercase().contains(&filter_lower)
-                    {
-                        continue;
-                    }
-                }
-
-                if item_index == selected {
-                    action = Some(OsListAction::SelectOs(os_id.to_string()));
-                    break;
-                }
-                item_index += 1;
-            }
-        }
-
-        if action.is_some() {
-            break;
-        }
-    }
-
-    // Check if custom OS was selected (at the end)
-    if action.is_none() && item_index == selected {
-        action = Some(OsListAction::CustomOs);
-    }
+    let items = build_os_list_items(app, state);
+    let action = items.get(state.os_list_selected).map(|item| match item {
+        OsListItem::Category { category, .. } => OsListAction::ToggleCategory(category.clone()),
+        OsListItem::Os { os_id, .. } => OsListAction::SelectOs(os_id.clone()),
+        OsListItem::Custom => OsListAction::CustomOs,
+    });
 
     // Now execute the action
     match action {
@@ -926,6 +1097,7 @@ fn handle_os_list_action(app: &mut App, proceed: bool) {
             if let Some(ref mut state) = app.wizard_state {
                 state.toggle_category(&cat);
             }
+            sync_os_filter_selection(app, false);
         }
         Some(OsListAction::SelectOs(os_id)) => {
             app.wizard_select_os(&os_id);
@@ -949,6 +1121,41 @@ enum OsListAction {
     ToggleCategory(String),
     SelectOs(String),
     CustomOs,
+}
+
+fn cycle_select_os_focus(app: &mut App, reverse: bool) {
+    if let Some(ref mut state) = app.wizard_state {
+        state.editing_field = match (reverse, state.editing_field.clone()) {
+            (false, None) => Some(WizardField::OsFilter),
+            (false, Some(WizardField::OsFilter)) => Some(WizardField::VmName),
+            (false, Some(WizardField::VmName)) => None,
+            (true, None) => Some(WizardField::VmName),
+            (true, Some(WizardField::VmName)) => Some(WizardField::OsFilter),
+            (true, Some(WizardField::OsFilter)) => None,
+            (_, other) => other,
+        };
+
+        if state.editing_field.is_none() {
+            state.update_folder_name(&app.config.vm_library_path);
+        }
+    }
+}
+
+fn sync_os_filter_selection(app: &mut App, prefer_first_match: bool) {
+    let (item_count, first_match) = match app.wizard_state.as_ref() {
+        Some(state) => {
+            let items = build_os_list_items(app, state);
+            (items.len(), first_matching_os_index(&items))
+        }
+        None => return,
+    };
+
+    if let Some(ref mut state) = app.wizard_state {
+        if prefer_first_match {
+            state.os_list_selected = first_match.unwrap_or(0);
+        }
+        clamp_os_list_selection(state, item_count);
+    }
 }
 
 // =============================================================================
