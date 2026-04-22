@@ -380,7 +380,7 @@ fn is_intel_macos(os_profile: Option<&str>, emulator: &str) -> bool {
     if !emulator.contains("x86_64") {
         return false;
     }
-    os_profile.map_or(false, |p| p.starts_with("macos-") || p.starts_with("mac-osx-"))
+    os_profile.is_some_and(|p| p.starts_with("macos-") || p.starts_with("mac-osx-"))
 }
 
 /// Check if an OS profile is a modern macOS that requires OpenCore

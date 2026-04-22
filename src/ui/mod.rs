@@ -339,140 +339,45 @@ fn render_dim_overlay(_frame: &mut Frame) {
     // The popup's Clear widget and borders provide sufficient contrast
 }
 
+fn render_modal_over_main<F>(app: &App, frame: &mut Frame, render_modal: F)
+where
+    F: FnOnce(&mut Frame),
+{
+    screens::main_menu::render(app, frame);
+    render_dim_overlay(frame);
+    render_modal(frame);
+}
+
 /// Render the current screen
 fn render(app: &App, frame: &mut Frame) {
     match &app.screen {
         Screen::MainMenu => screens::main_menu::render(app, frame),
-        Screen::Management => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::management::render(app, frame);
-        }
-        Screen::Configuration => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::configuration::render(app, frame);
-        }
-        Screen::RawScript => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::configuration::render_raw_script(app, frame);
-        }
-        Screen::EditNotes => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::configuration::render_edit_notes(app, frame);
-        }
-        Screen::DetailedInfo => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_detailed_info(app, frame);
-        }
-        Screen::Snapshots => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::management::render_snapshots(app, frame);
-        }
-        Screen::BootOptions => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::management::render_boot_options(app, frame);
-        }
-        Screen::DisplayOptions => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::management::render_display_options(app, frame);
-        }
-        Screen::UsbDevices => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_usb_devices(app, frame);
-        }
-        Screen::PciPassthrough => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::pci_passthrough::render(app, frame);
-        }
-        Screen::SharedFolders => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::shared_folders::render(app, frame);
-        }
-        Screen::SingleGpuSetup => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::single_gpu_setup::render(app, frame);
-        }
-        Screen::SingleGpuInstructions => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::single_gpu_setup::render_instructions(app, frame);
-        }
-        Screen::MultiGpuSetup => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::multi_gpu_setup::render(app, frame);
-        }
-        Screen::Confirm(action) => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_confirm(app, action, frame);
-        }
-        Screen::Help => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::help::render(frame);
-        }
-        Screen::Search => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_search(app, frame);
-        }
-        Screen::FileBrowser => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_file_browser(app, frame);
-        }
-        Screen::TextInput(context) => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_text_input(app, context, frame);
-        }
-        Screen::ErrorDialog => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_error_dialog(app, frame);
-        }
-        Screen::CreateWizard => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::create_wizard::render(app, frame);
-        }
-        Screen::CreateWizardCustomOs => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::create_wizard::render_custom_os(app, frame);
-        }
-        Screen::CreateWizardDownload => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::create_wizard::render_download(app, frame);
-        }
-        Screen::NetworkSettings => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::network_settings::render(app, frame);
-        }
-        Screen::Settings => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::settings::render(app, frame);
-        }
-        Screen::ImportWizard => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::import_wizard::render(app, frame);
-        }
+        Screen::Management => render_modal_over_main(app, frame, |frame| screens::management::render(app, frame)),
+        Screen::Configuration => render_modal_over_main(app, frame, |frame| screens::configuration::render(app, frame)),
+        Screen::RawScript => render_modal_over_main(app, frame, |frame| screens::configuration::render_raw_script(app, frame)),
+        Screen::EditNotes => render_modal_over_main(app, frame, |frame| screens::configuration::render_edit_notes(app, frame)),
+        Screen::DetailedInfo => render_modal_over_main(app, frame, |frame| render_detailed_info(app, frame)),
+        Screen::Snapshots => render_modal_over_main(app, frame, |frame| screens::management::render_snapshots(app, frame)),
+        Screen::BootOptions => render_modal_over_main(app, frame, |frame| screens::management::render_boot_options(app, frame)),
+        Screen::DisplayOptions => render_modal_over_main(app, frame, |frame| screens::management::render_display_options(app, frame)),
+        Screen::UsbDevices => render_modal_over_main(app, frame, |frame| render_usb_devices(app, frame)),
+        Screen::PciPassthrough => render_modal_over_main(app, frame, |frame| screens::pci_passthrough::render(app, frame)),
+        Screen::SharedFolders => render_modal_over_main(app, frame, |frame| screens::shared_folders::render(app, frame)),
+        Screen::SingleGpuSetup => render_modal_over_main(app, frame, |frame| screens::single_gpu_setup::render(app, frame)),
+        Screen::SingleGpuInstructions => render_modal_over_main(app, frame, |frame| screens::single_gpu_setup::render_instructions(app, frame)),
+        Screen::MultiGpuSetup => render_modal_over_main(app, frame, |frame| screens::multi_gpu_setup::render(app, frame)),
+        Screen::Confirm(action) => render_modal_over_main(app, frame, |frame| render_confirm(app, action, frame)),
+        Screen::Help => render_modal_over_main(app, frame, screens::help::render),
+        Screen::Search => render_modal_over_main(app, frame, |frame| render_search(app, frame)),
+        Screen::FileBrowser => render_modal_over_main(app, frame, |frame| render_file_browser(app, frame)),
+        Screen::TextInput(context) => render_modal_over_main(app, frame, |frame| render_text_input(app, context, frame)),
+        Screen::ErrorDialog => render_modal_over_main(app, frame, |frame| render_error_dialog(app, frame)),
+        Screen::CreateWizard => render_modal_over_main(app, frame, |frame| screens::create_wizard::render(app, frame)),
+        Screen::CreateWizardCustomOs => render_modal_over_main(app, frame, |frame| screens::create_wizard::render_custom_os(app, frame)),
+        Screen::CreateWizardDownload => render_modal_over_main(app, frame, |frame| screens::create_wizard::render_download(app, frame)),
+        Screen::NetworkSettings => render_modal_over_main(app, frame, |frame| screens::network_settings::render(app, frame)),
+        Screen::Settings => render_modal_over_main(app, frame, |frame| screens::settings::render(app, frame)),
+        Screen::ImportWizard => render_modal_over_main(app, frame, |frame| screens::import_wizard::render(app, frame)),
     }
 
     render_global_notification(app, frame);

@@ -682,9 +682,8 @@ fn extract_bios_path(content: &str, vm_dir: &Path) -> Option<PathBuf> {
 
         if let Some(idx) = trimmed.find("-bios ") {
             let rest = &trimmed[idx + 6..];
-            let raw_path = if rest.starts_with('"') {
+            let raw_path = if let Some(inner) = rest.strip_prefix('"') {
                 // Quoted path like -bios "$ROM"
-                let inner = &rest[1..];
                 if let Some(end) = inner.find('"') {
                     inner[..end].to_string()
                 } else {
