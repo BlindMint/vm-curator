@@ -371,7 +371,7 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
     ]));
     base_lines.push(Line::from(Span::styled(
         if base_focus { "[←/→] Change profile" } else { "" },
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(Color::Gray),
     )));
 
     let base_text = Paragraph::new(base_lines);
@@ -381,7 +381,7 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
     let tips_block = Block::default()
         .title(" Tip ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(Color::Gray));
 
     let tips_inner = tips_block.inner(chunks[8]);
     frame.render_widget(tips_block, chunks[8]);
@@ -390,13 +390,13 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
         "You can adjust QEMU settings in step 4.\n\
          Consider contributing new OS profiles to the project!"
     )
-    .style(Style::default().fg(Color::DarkGray))
+    .style(Style::default().fg(Color::Gray))
     .wrap(Wrap { trim: false });
     frame.render_widget(tips_text, tips_inner);
 
     // Help
     let help = Paragraph::new("[Tab] Next field  [Enter] Continue  [Esc] Cancel")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[9]);
 }
@@ -427,7 +427,7 @@ fn render_input_field(
     frame.render_widget(block, area);
 
     let text_style = if is_placeholder {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     } else if is_editing {
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
@@ -470,7 +470,7 @@ fn render_select_field(
 
     if is_focused {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(hint, Style::default().fg(Color::Gray)));
     }
 
     let text = Paragraph::new(Line::from(spans));
@@ -773,7 +773,7 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
         .border_style(filter_border);
     let filter_text = if state.os_filter.is_empty() {
         Paragraph::new("Type to fuzzy-filter OS entries by name, id, or summary")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(Color::Gray))
             .block(filter_block)
     } else {
         Paragraph::new(state.os_filter.as_str())
@@ -805,7 +805,7 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
 
     let name_text = if state.vm_name.is_empty() {
         Paragraph::new("Select an OS above...")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(Color::Gray))
             .block(name_block)
     } else {
         Paragraph::new(state.vm_name.as_str())
@@ -841,7 +841,7 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
         "[j/k] Select OS  [/] Filter  [Tab] Cycle fields  [Enter] Next  [Esc] Cancel"
     };
     let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[7]);
 }
@@ -872,7 +872,7 @@ fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
                 let category_style = if is_selected {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else if !has_matches && !state.os_filter.is_empty() {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(Color::Gray)
                 } else {
                     Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
                 };
@@ -885,7 +885,7 @@ fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
                 ];
                 if !state.os_filter.is_empty() {
                     let count_style = if *has_matches {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(Color::Gray)
                     } else {
                         Style::default().fg(Color::Red)
                     };
@@ -915,7 +915,7 @@ fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
                     Span::styled(prefix, os_style),
                     Span::styled(format!("   {}", chosen_marker), os_style),
                     Span::styled(display_name.to_string(), os_style),
-                    Span::styled(format!("  ({})", summary), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("  ({})", summary), Style::default().fg(Color::Gray)),
                 ]));
             }
             OsListItem::Custom => {
@@ -929,7 +929,7 @@ fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
                 lines.push(Line::from(vec![
                     Span::styled(prefix, custom_style),
                     Span::styled("   Custom OS...", custom_style),
-                    Span::styled("  (Define your own)", Style::default().fg(Color::DarkGray)),
+                    Span::styled("  (Define your own)", Style::default().fg(Color::Gray)),
                 ]));
             }
         }
@@ -1226,7 +1226,7 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
         ));
 
         if let Some(ref hint) = bios_config.hint {
-            lines.push(Line::styled(format!("       {}", hint), Style::default().fg(Color::DarkGray)));
+            lines.push(Line::styled(format!("       {}", hint), Style::default().fg(Color::Gray)));
         }
 
         if let Some(ref rom_path) = state.bios_rom_path {
@@ -1318,7 +1318,7 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
 
     // Help
     let help = Paragraph::new("[j/k] Select  [Enter] Choose  [Esc] Back")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[5]);
 }
@@ -1466,12 +1466,12 @@ fn render_step_configure_disk(app: &App, frame: &mut Frame, area: Rect) {
     let create_style = if !state.use_existing_disk {
         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     };
     let existing_style = if state.use_existing_disk {
         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     };
     let prefix = if source_focused { "> " } else { "  " };
 
@@ -1484,7 +1484,7 @@ fn render_step_configure_disk(app: &App, frame: &mut Frame, area: Rect) {
         Span::styled("Use Existing", existing_style),
         Span::styled(" ]", Style::default()),
         if source_focused {
-            Span::styled("  [←/→] toggle", Style::default().fg(Color::DarkGray))
+            Span::styled("  [←/→] toggle", Style::default().fg(Color::Gray))
         } else {
             Span::raw("")
         },
@@ -1523,7 +1523,7 @@ fn render_step_configure_disk(app: &App, frame: &mut Frame, area: Rect) {
         }
     };
     let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[5]);
 }
@@ -1669,12 +1669,12 @@ fn render_existing_disk_mode(app: &App, frame: &mut Frame, area: Rect) {
     let copy_style = if matches!(state.existing_disk_action, DiskAction::Copy) {
         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     };
     let move_style = if matches!(state.existing_disk_action, DiskAction::Move) {
         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     };
     let prefix = if action_focused { "> " } else { "  " };
 
@@ -1696,7 +1696,7 @@ fn render_existing_disk_mode(app: &App, frame: &mut Frame, area: Rect) {
         state.folder_name
     );
     let note = Paragraph::new(note_text)
-        .style(Style::default().fg(Color::DarkGray));
+        .style(Style::default().fg(Color::Gray));
     frame.render_widget(note, sub_chunks[4]);
 }
 
@@ -2092,7 +2092,7 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
     ));
 
     lines.push(Line::from(""));
-    lines.push(Line::styled("  Features (toggle with Space):", Style::default().fg(Color::DarkGray)));
+    lines.push(Line::styled("  Features (toggle with Space):", Style::default().fg(Color::Gray)));
 
     // KVM toggle
     let kvm_selected = focus == 10;
@@ -2128,7 +2128,7 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
         "[j/k] Navigate  [Tab] Edit  [←/→] Change  [Space] Toggle  [Enter] Next"
     };
     let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, left_chunks[2]);
 
@@ -2140,7 +2140,7 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
     // Right side: Explanation notes
     let notes_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(Color::Gray));
 
     let notes_inner = notes_block.inner(right_chunks[1]);
     frame.render_widget(notes_block, right_chunks[1]);
@@ -2151,6 +2151,10 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
         .style(Style::default().fg(Color::Gray))
         .wrap(Wrap { trim: false });
     frame.render_widget(notes, notes_inner);
+
+    if app.wizard_editing_port_forwards {
+        render_wizard_port_forward_editor(app, frame, centered_rect(56, 14, area));
+    }
 }
 
 fn render_field_line(label: &str, value: &str, selected: bool, editing: bool, hint: &str) -> Line<'static> {
@@ -2163,7 +2167,7 @@ fn render_field_line(label: &str, value: &str, selected: bool, editing: bool, hi
     } else {
         Style::default().fg(Color::White)
     };
-    let hint_style = Style::default().fg(Color::DarkGray);
+    let hint_style = Style::default().fg(Color::Gray);
 
     Line::from(vec![
         Span::styled(prefix.to_string(), if selected { Style::default().fg(Color::Yellow) } else { Style::default() }),
@@ -2632,6 +2636,158 @@ fn handle_wizard_port_forward_editor(app: &mut App, key: KeyEvent) -> Result<()>
     Ok(())
 }
 
+fn render_wizard_port_forward_editor(app: &App, frame: &mut Frame, area: Rect) {
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Port Forwarding ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(1),   // Header
+            Constraint::Length(1),   // Spacer
+            Constraint::Min(4),      // Rules / form
+            Constraint::Length(1),   // Spacer
+            Constraint::Length(1),   // Presets
+            Constraint::Length(2),   // Help
+        ])
+        .split(inner);
+
+    if let Some(ref adding) = app.wizard_adding_pf {
+        render_wizard_adding_pf(adding, frame, area);
+        return;
+    }
+
+    let header = Paragraph::new("Port Forwarding Rules")
+        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    frame.render_widget(header, chunks[0]);
+
+    if let Some(state) = app.wizard_state.as_ref() {
+        if state.qemu_config.port_forwards.is_empty() {
+            let msg = Paragraph::new("  No port forwarding rules configured.")
+                .style(Style::default().fg(Color::Gray));
+            frame.render_widget(msg, chunks[2]);
+        } else {
+            let mut lines = Vec::new();
+            for (i, pf) in state.qemu_config.port_forwards.iter().enumerate() {
+                let is_selected = i == app.wizard_pf_selected;
+                let prefix = if is_selected { "> " } else { "  " };
+                let style = if is_selected {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                lines.push(Line::styled(
+                    format!("{}{}  {} -> {}", prefix, pf.protocol, pf.host_port, pf.guest_port),
+                    style,
+                ));
+            }
+            frame.render_widget(Paragraph::new(lines), chunks[2]);
+        }
+    }
+
+    let presets = Paragraph::new("  Presets: [1] SSH  [2] RDP  [3] HTTP  [4] HTTPS  [5] VNC")
+        .style(Style::default().fg(Color::Gray));
+    frame.render_widget(presets, chunks[4]);
+
+    let help = Paragraph::new("[a] Add  [d] Delete  [1-5] Preset  [Esc] Done")
+        .style(Style::default().fg(Color::Gray))
+        .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[5]);
+}
+
+fn render_wizard_adding_pf(adding: &crate::app::AddingPortForward, frame: &mut Frame, area: Rect) {
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Add Port Forward ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(1),   // Header
+            Constraint::Length(1),   // Spacer
+            Constraint::Length(1),   // Protocol
+            Constraint::Length(1),   // Host port
+            Constraint::Length(1),   // Guest port
+            Constraint::Min(2),      // Spacer
+            Constraint::Length(2),   // Help
+        ])
+        .split(inner);
+
+    let header = Paragraph::new("Add Port Forward Rule")
+        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    frame.render_widget(header, chunks[0]);
+
+    let proto_active = adding.step == crate::app::AddPfStep::Protocol;
+    let proto_style = if proto_active {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  Protocol: ", Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{}", adding.protocol), proto_style),
+            Span::styled(
+                if proto_active { " [Left/Right] toggle" } else { "" },
+                Style::default().fg(Color::Gray),
+            ),
+        ])),
+        chunks[2],
+    );
+
+    let host_active = adding.step == crate::app::AddPfStep::HostPort;
+    let host_style = if host_active {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  Host Port: ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                if adding.host_port_input.is_empty() { "_" } else { &adding.host_port_input },
+                host_style,
+            ),
+        ])),
+        chunks[3],
+    );
+
+    let guest_active = adding.step == crate::app::AddPfStep::GuestPort;
+    let guest_style = if guest_active {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  Guest Port: ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                if adding.guest_port_input.is_empty() { "_" } else { &adding.guest_port_input },
+                guest_style,
+            ),
+        ])),
+        chunks[4],
+    );
+
+    let help = Paragraph::new("[Enter] Next/Confirm  [Esc] Cancel")
+        .style(Style::default().fg(Color::Gray))
+        .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[6]);
+}
+
 fn add_wizard_preset(app: &mut App, protocol: crate::vm::qemu_config::PortProtocol, host_port: u16, guest_port: u16) {
     if let Some(ref mut state) = app.wizard_state {
         if !state.qemu_config.port_forwards.iter().any(|pf| pf.host_port == host_port && pf.guest_port == guest_port) {
@@ -2873,12 +3029,22 @@ fn render_step_confirm(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(summary, chunks[2]);
 
     // Auto-launch toggle
+    let launch_selected = state.field_focus == 1;
     let launch_box = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Gray));
+        .border_style(if launch_selected {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Gray)
+        });
     let checkbox = if state.auto_launch { "[x]" } else { "[ ]" };
-    let launch_text = Paragraph::new(format!("{} Launch VM in install mode after creation", checkbox))
-        .style(Style::default().fg(Color::White))
+    let launch_prefix = if launch_selected { "> " } else { "  " };
+    let launch_text = Paragraph::new(format!("{}{} Launch VM in install mode after creation", launch_prefix, checkbox))
+        .style(if launch_selected {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        })
         .block(launch_box);
     frame.render_widget(launch_text, chunks[3]);
 
@@ -2890,8 +3056,8 @@ fn render_step_confirm(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     // Help
-    let help = Paragraph::new("[Enter] Create VM  [Space] Toggle launch  [Esc] Back")
-        .style(Style::default().fg(Color::DarkGray))
+    let help = Paragraph::new("[j/k] Navigate  [Enter] Select/Create  [Space] Toggle launch  [Esc] Back")
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[5]);
 }
@@ -2901,12 +3067,38 @@ fn handle_step_confirm(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Esc => {
             app.wizard_prev_step();
         }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(ref mut state) = app.wizard_state {
+                if state.field_focus < 1 {
+                    state.field_focus += 1;
+                }
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(ref mut state) = app.wizard_state {
+                if state.field_focus > 0 {
+                    state.field_focus -= 1;
+                }
+            }
+        }
         KeyCode::Char(' ') => {
             if let Some(ref mut state) = app.wizard_state {
-                state.auto_launch = !state.auto_launch;
+                if state.field_focus == 1 {
+                    state.auto_launch = !state.auto_launch;
+                }
             }
         }
         KeyCode::Enter => {
+            let launch_selected = app.wizard_state.as_ref()
+                .map(|s| s.field_focus == 1)
+                .unwrap_or(false);
+            if launch_selected {
+                if let Some(ref mut state) = app.wizard_state {
+                    state.auto_launch = !state.auto_launch;
+                }
+                return Ok(());
+            }
+
             // Create the VM
             let (library_path, auto_launch) = {
                 let state = app.wizard_state.as_ref().unwrap();

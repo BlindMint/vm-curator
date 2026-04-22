@@ -1665,6 +1665,8 @@ impl App {
 
     /// Start the VM creation wizard
     pub fn start_create_wizard(&mut self) {
+        self.reset_wizard_port_forward_state();
+
         let state = CreateWizardState {
             disk_size_gb: self.config.default_disk_size_gb,
             qemu_config: WizardQemuConfig {
@@ -1683,6 +1685,7 @@ impl App {
 
     /// Cancel the wizard and return to main menu
     pub fn cancel_wizard(&mut self) {
+        self.reset_wizard_port_forward_state();
         self.wizard_state = None;
         // Pop all wizard-related screens
         while matches!(
@@ -1695,33 +1698,48 @@ impl App {
 
     /// Move to the next wizard step
     pub fn wizard_next_step(&mut self) -> Result<(), String> {
-        if let Some(ref mut state) = self.wizard_state {
-            // Validate current step
-            state.can_proceed()?;
+        let next = match self.wizard_state.as_ref() {
+            Some(state) => {
+                state.can_proceed()?;
+                state.step.next()
+            }
+            None => return Err("Wizard not active".to_string()),
+        };
 
-            // Move to next step
-            if let Some(next) = state.step.next() {
+        if let Some(next) = next {
+            self.reset_wizard_port_forward_state();
+            if let Some(ref mut state) = self.wizard_state {
                 state.step = next;
                 state.field_focus = 0;
+                state.editing_field = None;
+                state.wizard_edit_buffer.clear();
                 state.error_message = None;
-                Ok(())
-            } else {
-                Err("Already at final step".to_string())
             }
+            Ok(())
         } else {
-            Err("Wizard not active".to_string())
+            Err("Already at final step".to_string())
         }
     }
 
     /// Move to the previous wizard step
     pub fn wizard_prev_step(&mut self) {
-        if let Some(ref mut state) = self.wizard_state {
-            if let Some(prev) = state.step.prev() {
+        let prev = self.wizard_state.as_ref().and_then(|state| state.step.prev());
+        if let Some(prev) = prev {
+            self.reset_wizard_port_forward_state();
+            if let Some(ref mut state) = self.wizard_state {
                 state.step = prev;
                 state.field_focus = 0;
+                state.editing_field = None;
+                state.wizard_edit_buffer.clear();
                 state.error_message = None;
             }
         }
+    }
+
+    fn reset_wizard_port_forward_state(&mut self) {
+        self.wizard_editing_port_forwards = false;
+        self.wizard_pf_selected = 0;
+        self.wizard_adding_pf = None;
     }
 
     /// Select an OS profile in the wizard
