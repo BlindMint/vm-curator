@@ -12,6 +12,7 @@ All notable changes to this fork are documented here. Upstream release history i
 - Fixed imported/existing-disk auto-launch behavior so those workflows no longer default to installer boot mode when no install media is present.
 
 ### Changed
+- Rebranded the fork as **VM Foundry** while keeping upstream config and metadata paths for compatibility.
 - Kept footer shortcut hints visible and moved transient notifications into a shared non-intrusive overlay.
 - Added fuzzy OS filtering to the create wizard while keeping category structure visible.
 - Added a shared busy/progress overlay for long-running background operations.
@@ -84,7 +85,7 @@ All notable changes to this fork are documented here. Upstream release history i
   - Compatibility warnings for unsupported features (macvtap, virtio-net bridges, SPICE displays)
 - **VM Notes**: Add free-form personal notes to any VM from the management menu
   - Multi-line text editor with full keyboard navigation
-  - Notes stored in per-VM `vm-curator.toml` and displayed in the main info panel below Fun Facts
+  - Notes stored in per-VM `vm-foundry.toml` and displayed in the main info panel below Fun Facts
   - Notes preserved across VM renames
 
 **v0.3.4**
@@ -159,7 +160,7 @@ All notable changes to this fork are documented here. Upstream release history i
 
 **v0.1.2**
 - **Binary Packages**: Pre-built packages now available for Linux (DEB, RPM, AppImage, tarball)
-- **crates.io**: Install via `cargo install vm-curator`
+- **crates.io**: Install via `cargo install vm-foundry`
 - **AUR**: Available for Arch & Arch-derived Linux users (incl. CachyOS, EndeavourOS, Garuda, and Omarchy)
 
 **v0.1.1**

@@ -1734,7 +1734,7 @@ impl App {
         }
     }
 
-    /// Save the editor content as notes to vm-curator.toml
+    /// Save the editor content as notes to vm-foundry.toml
     pub fn save_notes_from_editor(&mut self) -> Result<()> {
         let vm = self.selected_vm()
             .ok_or_else(|| anyhow::anyhow!("No VM selected"))?;

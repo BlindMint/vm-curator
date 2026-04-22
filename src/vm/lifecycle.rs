@@ -396,7 +396,7 @@ pub fn delete_vm(vm: &DiscoveredVm, permanent: bool) -> Result<()> {
     Ok(())
 }
 
-/// Rename a VM by updating its display name in vm-curator.toml
+/// Rename a VM by updating its display name in vm-foundry.toml
 pub fn rename_vm(vm: &DiscoveredVm, new_name: &str) -> Result<()> {
     // Preserve existing os_profile and notes
     let os_profile = vm.os_profile.as_deref()
@@ -479,7 +479,7 @@ pub fn force_stop_vm(pid: u32) -> Result<()> {
 
 
 // USB Passthrough configuration markers
-const USB_MARKER_START: &str = "# >>> USB Passthrough (managed by vm-curator) >>>";
+const USB_MARKER_START: &str = "# >>> USB Passthrough (managed by vm-foundry) >>>";
 const USB_MARKER_END: &str = "# <<< USB Passthrough <<<";
 
 /// Save USB passthrough configuration to the VM's launch.sh
@@ -761,7 +761,7 @@ fn extract_hex_value(s: &str, prefix: &str) -> Option<u16> {
 }
 
 // Shared Folders section markers
-const SHARED_FOLDERS_MARKER_START: &str = "# >>> Shared Folders (managed by vm-curator) >>>";
+const SHARED_FOLDERS_MARKER_START: &str = "# >>> Shared Folders (managed by vm-foundry) >>>";
 const SHARED_FOLDERS_MARKER_END: &str = "# <<< Shared Folders <<<";
 
 /// A shared folder configuration for virtio-9p host-to-guest file sharing
@@ -974,7 +974,7 @@ fn extract_simple_value(s: &str, prefix: &str) -> Option<String> {
 }
 
 // PCI Passthrough section markers
-const PCI_MARKER_START: &str = "# >>> PCI Passthrough (managed by vm-curator) >>>";
+const PCI_MARKER_START: &str = "# >>> PCI Passthrough (managed by vm-foundry) >>>";
 const PCI_MARKER_END: &str = "# <<< PCI Passthrough <<<";
 
 /// Load PCI passthrough configuration from the VM's launch.sh

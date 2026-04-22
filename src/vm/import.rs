@@ -9,6 +9,7 @@ use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
 
 use crate::app::{ImportDiskAction, ImportSource, ImportableVm, WizardQemuConfig};
+use crate::commands::qemu_system::{classify_bridge, is_lab_friendly_bridge};
 
 // =========================================================================
 // libvirt XML Parsing
@@ -845,6 +846,20 @@ fn map_network(
             } else {
                 Some(net_bridge.to_string())
             };
+            if let Some(ref bridge_name) = bridge {
+                if is_lab_friendly_bridge(bridge_name) {
+                    import_notes.push(format!(
+                        "Network: bridge '{}' looks like a private/libvirt bridge and is a reasonable default for isolated lab guests.",
+                        bridge_name
+                    ));
+                } else {
+                    import_notes.push(format!(
+                        "Network: bridge '{}' looks like a {}. Guests may be directly exposed to the attached network.",
+                        bridge_name,
+                        classify_bridge(bridge_name)
+                    ));
+                }
+            }
             ("bridge".to_string(), bridge, model)
         }
         "network" => {
@@ -858,7 +873,7 @@ fn map_network(
         "direct" => {
             import_notes.push(
                 "Network: macvtap (direct attach) changed to user networking \
-                 (macvtap not supported in vm-curator)"
+                 (macvtap not supported in VM Foundry)"
                     .to_string(),
             );
             ("user".to_string(), None, model)

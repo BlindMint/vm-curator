@@ -22,10 +22,10 @@ use app::App;
 use config::Config;
 
 #[derive(Parser)]
-#[command(name = "vm-curator")]
+#[command(name = "vm-foundry")]
 #[command(author = "Mark Roboff")]
 #[command(version)]
-#[command(about = "A TUI application to manage your QEMU VM library")]
+#[command(about = "A TUI application to manage your desktop QEMU VM library")]
 struct Cli {
     /// Path to VM library directory
     #[arg(short, long)]
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
 fn prompt_vm_library_setup(mut config: Config) -> Result<Config> {
     println!();
     println!("\x1b[1;36m╭─────────────────────────────────────╮\x1b[0m");
-    println!("\x1b[1;36m│\x1b[0m    \x1b[1;33mVM Curator\x1b[0m - First Time Setup    \x1b[1;36m│\x1b[0m");
+    println!("\x1b[1;36m│\x1b[0m    \x1b[1;33mVM Foundry\x1b[0m - First Time Setup    \x1b[1;36m│\x1b[0m");
     println!("\x1b[1;36m╰─────────────────────────────────────╯\x1b[0m");
     println!();
     println!("VM library directory not found.");
@@ -240,7 +240,7 @@ fn run_tui(config: Config) -> Result<()> {
 fn print_loading_header() {
     println!();
     println!("\x1b[1;36m╭─────────────────────────────────────╮\x1b[0m");
-    println!("\x1b[1;36m│\x1b[0m    \x1b[1;33mVM Curator\x1b[0m - QEMU VM Manager     \x1b[1;36m│\x1b[0m");
+    println!("\x1b[1;36m│\x1b[0m    \x1b[1;33mVM Foundry\x1b[0m - QEMU Lab Manager    \x1b[1;36m│\x1b[0m");
     println!("\x1b[1;36m╰─────────────────────────────────────╯\x1b[0m");
     println!();
 }

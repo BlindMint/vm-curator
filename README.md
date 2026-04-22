@@ -1,8 +1,8 @@
-# vm-curator
+# vm-foundry
 
 A Rust TUI for managing desktop QEMU/KVM virtual machines with a VM library workflow, guided creation/import, GPU passthrough, networking controls, and a large catalog of pre-configured OS profiles.
 
-This repository is maintained as a personal fork. Fork-specific fixes and UI changes are tracked in [CHANGELOG.md](./CHANGELOG.md).
+This repository is maintained as a personal fork under the name **VM Foundry**. Fork-specific fixes and UI changes are tracked in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Features
 
@@ -44,7 +44,7 @@ This repository is maintained as a personal fork. Fork-specific fixes and UI cha
 ## Screenshots
 
 ```text
- VM Curator (QEMU VM Library in ~/vm-space)
+ VM Foundry (QEMU VM Library in ~/vm-space)
 ┌─────────────────────────────────────────────────────────────────────┐
 │ ┌─────────────────────────┐  ┌────────────────────────────────────┐ │
 │ │ VMs (35)                │  │       _    _ _           _        │ │
@@ -73,46 +73,46 @@ This repository is maintained as a personal fork. Fork-specific fixes and UI cha
 **AUR (Arch / Arch-derived)**
 
 ```bash
-paru -S vm-curator
-yay -S vm-curator
+paru -S vm-foundry
+yay -S vm-foundry
 ```
 
 **crates.io**
 
 ```bash
-cargo install vm-curator
+cargo install vm-foundry
 ```
 
 **Binary Packages**
 
-Pre-built packages (DEB, RPM, AppImage, tarball) are available from [GitHub Releases](https://github.com/mroboff/vm-curator/releases).
+Pre-built packages (DEB, RPM, AppImage, tarball) can be published from [GitHub Releases](https://github.com/BlindMint/vm-foundry/releases).
 
 ### Build From Source
 
 ```bash
-git clone https://github.com/mroboff/vm-curator.git
-cd vm-curator
+git clone https://github.com/BlindMint/vm-foundry.git
+cd vm-foundry
 cargo build --release
 ```
 
-The built binary will be at `target/release/vm-curator`.
+The built binary will be at `target/release/vm-foundry`.
 
 ### Install a Local Build Safely
 
-If you already have the AUR package installed, do not overwrite `/usr/bin/vm-curator` directly. That path is package-managed.
+If you already have an installed package, do not overwrite `/usr/bin/vm-foundry` directly. That path is package-managed.
 
 Install your locally built binary to `/usr/local/bin` instead:
 
 ```bash
-sudo install -Dm755 target/release/vm-curator /usr/local/bin/vm-curator
+sudo install -Dm755 target/release/vm-foundry /usr/local/bin/vm-foundry
 ```
 
-That keeps your custom build separate from the AUR-managed binary while still allowing `/usr/local/bin/vm-curator` to take precedence on most systems.
+That keeps your custom build separate from any package-managed upstream binary while still allowing `/usr/local/bin/vm-foundry` to take precedence on most systems.
 
 To confirm which binary will run:
 
 ```bash
-type -a vm-curator
+type -a vm-foundry
 ```
 
 ## Requirements
@@ -138,31 +138,31 @@ type -a vm-curator
 ### TUI Mode
 
 ```bash
-vm-curator
+vm-foundry
 ```
 
 ### CLI Commands
 
 ```bash
 # List all VMs
-vm-curator list
+vm-foundry list
 
 # Launch a VM
-vm-curator launch windows-95
-vm-curator launch windows-95 --install
-vm-curator launch windows-95 --cdrom /path/to/image.iso
+vm-foundry launch windows-95
+vm-foundry launch windows-95 --install
+vm-foundry launch windows-95 --cdrom /path/to/image.iso
 
 # View VM configuration
-vm-curator info windows-95
+vm-foundry info windows-95
 
 # Manage snapshots
-vm-curator snapshot windows-95 list
-vm-curator snapshot windows-95 create my-snapshot
-vm-curator snapshot windows-95 restore my-snapshot
-vm-curator snapshot windows-95 delete my-snapshot
+vm-foundry snapshot windows-95 list
+vm-foundry snapshot windows-95 create my-snapshot
+vm-foundry snapshot windows-95 restore my-snapshot
+vm-foundry snapshot windows-95 delete my-snapshot
 
 # List available QEMU emulators
-vm-curator emulators
+vm-foundry emulators
 ```
 
 ## Key Bindings
@@ -222,7 +222,7 @@ Management menu options include:
 
 ## Configuration
 
-Settings are stored in `~/.config/vm-curator/config.toml` and can also be edited from the TUI settings screen.
+Settings are stored in `~/.config/vm-foundry/config.toml` and can also be edited from the TUI settings screen.
 
 ```toml
 # VM library location
@@ -269,7 +269,7 @@ VMs are expected in your library directory (default `~/vm-space/`) with a struct
     └── disk.qcow2
 ```
 
-`vm-curator` parses `launch.sh` to discover and manage existing VMs, and it can generate new scripts from the creation wizard.
+`vm-foundry` parses `launch.sh` to discover and manage existing VMs, and it can generate new scripts from the creation wizard.
 
 ## OS Profiles
 
@@ -298,7 +298,7 @@ Each profile includes QEMU defaults such as emulator, machine type, CPU model, V
 
 **OS metadata**
 
-Override or add OS metadata in `~/.config/vm-curator/metadata/`:
+Override or add OS metadata in `~/.config/vm-foundry/metadata/`:
 
 ```toml
 [my-custom-os]
@@ -317,15 +317,15 @@ facts = ["Fact 1", "Fact 2"]
 
 **ASCII art**
 
-Add custom ASCII art in `~/.config/vm-curator/ascii/`.
+Add custom ASCII art in `~/.config/vm-foundry/ascii/`.
 
 **QEMU profiles**
 
-Override profiles in `~/.config/vm-curator/qemu_profiles.toml`.
+Override profiles in `~/.config/vm-foundry/qemu_profiles.toml`.
 
 ## Cross-Distribution Notes
 
-`vm-curator` automatically detects OVMF/UEFI firmware paths across major Linux distributions, including Arch, Debian/Ubuntu, Fedora/RHEL, and NixOS-compatible layouts.
+`vm-foundry` automatically detects OVMF/UEFI firmware paths across major Linux distributions, including Arch, Debian/Ubuntu, Fedora/RHEL, and NixOS-compatible layouts.
 
 ## Project Status
 
@@ -337,7 +337,7 @@ Contributions are welcome. If you find a bug or have an idea for an improvement,
 
 ### Help Wanted: ASCII Art
 
-As a TUI application, `vm-curator` benefits from strong terminal aesthetics. Useful contributions include:
+As a TUI application, `vm-foundry` benefits from strong terminal aesthetics. Useful contributions include:
 
 - Logo or banner art for the startup screen
 - Small ASCII/block-style icons for menus and status views

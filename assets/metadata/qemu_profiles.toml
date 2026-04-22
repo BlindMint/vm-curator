@@ -1,6 +1,6 @@
-# QEMU Configuration Profiles for VM Curator
+# QEMU Configuration Profiles for VM Foundry
 # This file contains OS-specific QEMU defaults for all supported operating systems.
-# Profiles can be overridden in ~/.config/vm-curator/qemu_profiles.toml
+# Profiles can be overridden in ~/.config/vm-foundry/qemu_profiles.toml
 #
 # Fields:
 #   display_name - Human-readable OS name (matches defaults.toml)

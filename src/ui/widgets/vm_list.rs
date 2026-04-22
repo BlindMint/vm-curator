@@ -224,7 +224,7 @@ fn build_vm_hierarchy<'a>(
 
 /// Get display name for a VM, using custom name if set, otherwise metadata or generated name
 fn get_display_name(vm: &DiscoveredVm, metadata: &crate::metadata::MetadataStore) -> String {
-    // First priority: custom name from vm-curator.toml
+    // First priority: custom name from vm-foundry.toml
     if let Some(ref custom_name) = vm.custom_name {
         return custom_name.clone();
     }

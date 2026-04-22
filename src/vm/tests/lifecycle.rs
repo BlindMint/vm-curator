@@ -101,7 +101,7 @@ fn test_parse_shared_folders_section_multiple() {
 
 #[test]
 fn test_remove_shared_folders_section() {
-    let content = "#!/bin/bash\n# >>> Shared Folders (managed by vm-curator) >>>\nSHARED_FOLDERS_ARGS=\"...\"\n# <<< Shared Folders <<<\nqemu-system-x86_64 $SHARED_FOLDERS_ARGS\n";
+    let content = "#!/bin/bash\n# >>> Shared Folders (managed by vm-foundry) >>>\nSHARED_FOLDERS_ARGS=\"...\"\n# <<< Shared Folders <<<\nqemu-system-x86_64 $SHARED_FOLDERS_ARGS\n";
     let result = remove_shared_folders_section(content);
     assert!(!result.contains("SHARED_FOLDERS"));
     assert!(!result.contains(">>> Shared Folders"));
@@ -111,7 +111,7 @@ fn test_remove_shared_folders_section() {
 #[test]
 fn test_insert_shared_folders_section_simple() {
     let content = "#!/bin/bash\nqemu-system-x86_64 -m 2048\n";
-    let section = "# >>> Shared Folders (managed by vm-curator) >>>\nSHARED_FOLDERS_ARGS=\"-fsdev local,id=fsdev0,path=/tmp,security_model=mapped-xattr -device virtio-9p-pci,fsdev=fsdev0,mount_tag=host_tmp\"\n# <<< Shared Folders <<<\n";
+    let section = "# >>> Shared Folders (managed by vm-foundry) >>>\nSHARED_FOLDERS_ARGS=\"-fsdev local,id=fsdev0,path=/tmp,security_model=mapped-xattr -device virtio-9p-pci,fsdev=fsdev0,mount_tag=host_tmp\"\n# <<< Shared Folders <<<\n";
     let result = insert_shared_folders_section(content, section);
     assert!(result.contains(SHARED_FOLDERS_MARKER_START));
     assert!(result.contains("$SHARED_FOLDERS_ARGS"));
@@ -126,7 +126,7 @@ fn test_insert_section_before_case_statement() {
     // Scripts with case statements need the variable defined BEFORE the case,
     // not inside a branch (otherwise other branches can't see it).
     let content = "#!/bin/bash\nVM_DIR=\".\"\ncase \"$1\" in\n    --install)\n        qemu-system-x86_64 -m 2048\n        ;;\n    \"\")\n        qemu-system-x86_64 -m 2048\n        ;;\nesac\n";
-    let section = "# >>> Shared Folders (managed by vm-curator) >>>\nSHARED_FOLDERS_ARGS=\"test\"\n# <<< Shared Folders <<<\n";
+    let section = "# >>> Shared Folders (managed by vm-foundry) >>>\nSHARED_FOLDERS_ARGS=\"test\"\n# <<< Shared Folders <<<\n";
     let result = insert_shared_folders_section(content, section);
 
     // Section must appear before the case statement

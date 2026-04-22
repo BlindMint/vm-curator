@@ -57,7 +57,7 @@ impl Default for Config {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| home.join(".config"))
-            .join("vm-curator");
+            .join("vm-foundry");
 
         Self {
             vm_library_path: home.join("vm-space"),
@@ -126,7 +126,7 @@ impl Config {
     pub fn config_file_path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from(".config"))
-            .join("vm-curator")
+            .join("vm-foundry")
             .join("config.toml")
     }
 }

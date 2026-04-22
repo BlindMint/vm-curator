@@ -192,7 +192,7 @@ pub fn get_mount_tier(app: &App) -> &'static str {
         None => return "unknown",
     };
 
-    // Get the OS profile ID from vm-curator.toml metadata, fall back to directory ID
+    // Get the OS profile ID from vm-foundry.toml metadata, fall back to directory ID
     let profile_id = vm.os_profile.clone().or_else(|| Some(vm.id.clone()));
 
     // Check specific unsupported profile IDs first

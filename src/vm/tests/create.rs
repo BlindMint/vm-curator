@@ -1,6 +1,7 @@
 use super::*;
 use crate::app::CreateWizardState;
 use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,6 +32,26 @@ fn test_generate_folder_name() {
     assert_eq!(CreateWizardState::generate_folder_name("Debian GNU/Linux"), "debian-gnu-linux");
     assert_eq!(CreateWizardState::generate_folder_name("MS-DOS 6.22"), "ms-dos-6-22");
     assert_eq!(CreateWizardState::generate_folder_name("  Spaced  Out  "), "spaced-out");
+}
+
+#[test]
+fn test_write_vm_metadata_uses_vm_foundry_filename() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let vm_dir = std::env::temp_dir().join(format!("vm-foundry-metadata-{}", unique));
+    fs::create_dir_all(&vm_dir).unwrap();
+
+    write_vm_metadata(&vm_dir, "Ubuntu Lab", Some("linux-ubuntu"), Some("notes")).unwrap();
+
+    let metadata_path = vm_dir.join("vm-foundry.toml");
+    assert!(metadata_path.exists(), "metadata file should use vm-foundry.toml");
+    let content = fs::read_to_string(metadata_path).unwrap();
+    assert!(content.contains("display_name = \"Ubuntu Lab\""));
+    assert!(content.contains("os_profile = \"linux-ubuntu\""));
+
+    let _ = fs::remove_dir_all(&vm_dir);
 }
 
 #[test]
@@ -143,7 +164,7 @@ fn test_update_network_in_script_preserves_case_syntax_and_usb_lines() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let vm_dir = std::env::temp_dir().join(format!("vm-curator-test-{}", unique));
+    let vm_dir = std::env::temp_dir().join(format!("vm-foundry-test-{}", unique));
     fs::create_dir_all(&vm_dir).unwrap();
 
     let config = WizardQemuConfig::default();

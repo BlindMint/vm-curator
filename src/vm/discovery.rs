@@ -15,11 +15,11 @@ pub struct DiscoveredVm {
     pub launch_script: PathBuf,
     /// Parsed QEMU configuration
     pub config: QemuConfig,
-    /// Custom display name from vm-curator.toml (if set)
+    /// Custom display name from vm-foundry.toml (if set)
     pub custom_name: Option<String>,
-    /// OS profile ID from vm-curator.toml (if set)
+    /// OS profile ID from vm-foundry.toml (if set)
     pub os_profile: Option<String>,
-    /// User notes from vm-curator.toml (if set)
+    /// User notes from vm-foundry.toml (if set)
     pub notes: Option<String>,
 }
 
@@ -361,9 +361,9 @@ fn fallback_title_case(s: &str) -> String {
         .join(" ")
 }
 
-/// Read VM metadata from vm-curator.toml
+/// Read VM metadata from vm-foundry.toml
 fn read_vm_metadata(vm_path: &Path) -> (Option<String>, Option<String>, Option<String>) {
-    let metadata_path = vm_path.join("vm-curator.toml");
+    let metadata_path = vm_path.join("vm-foundry.toml");
 
     if !metadata_path.exists() {
         return (None, None, None);
@@ -495,7 +495,7 @@ pub fn discover_vms(library_path: &Path) -> Result<Vec<DiscoveredVm>> {
             }
         };
 
-        // Read vm-curator.toml metadata if it exists
+        // Read vm-foundry.toml metadata if it exists
         let (custom_name, os_profile, notes) = read_vm_metadata(&path);
 
         vms.push(DiscoveredVm {

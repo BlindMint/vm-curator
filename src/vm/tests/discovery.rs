@@ -1,4 +1,6 @@
 use super::*;
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn test_display_name() {
@@ -66,4 +68,34 @@ fn test_custom_names() {
         format_os_display_name("my-first-pc"),
         "Microsoft® MS-DOS / Windows 3.1 (My First PC)"
     );
+}
+
+#[test]
+fn test_discover_vms_reads_vm_foundry_metadata() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let library_dir = std::env::temp_dir().join(format!("vm-foundry-discovery-{}", unique));
+    let vm_dir = library_dir.join("linux-ubuntu");
+    fs::create_dir_all(&vm_dir).unwrap();
+
+    fs::write(
+        vm_dir.join("launch.sh"),
+        "#!/bin/bash\nqemu-system-x86_64 -m 2048M -drive file=disk.qcow2,if=virtio\n",
+    )
+    .unwrap();
+    fs::write(
+        vm_dir.join("vm-foundry.toml"),
+        "display_name = \"Ubuntu Lab\"\nos_profile = \"linux-ubuntu\"\nnotes = \"training box\"\n",
+    )
+    .unwrap();
+
+    let vms = discover_vms(&library_dir).unwrap();
+    assert_eq!(vms.len(), 1);
+    assert_eq!(vms[0].custom_name.as_deref(), Some("Ubuntu Lab"));
+    assert_eq!(vms[0].os_profile.as_deref(), Some("linux-ubuntu"));
+    assert_eq!(vms[0].notes.as_deref(), Some("training box"));
+
+    let _ = fs::remove_dir_all(&library_dir);
 }

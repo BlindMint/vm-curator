@@ -601,7 +601,7 @@ fn save_pci_passthrough(app: &App) -> anyhow::Result<usize> {
 }
 
 // Markers for PCI passthrough section in launch.sh
-const PCI_MARKER_START: &str = "# >>> PCI Passthrough (managed by vm-curator) >>>";
+const PCI_MARKER_START: &str = "# >>> PCI Passthrough (managed by vm-foundry) >>>";
 const PCI_MARKER_END: &str = "# <<< PCI Passthrough <<<";
 
 fn remove_pci_section(content: &str) -> String {

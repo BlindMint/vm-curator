@@ -87,7 +87,7 @@ pub fn enumerate_usb_devices() -> Result<Vec<UsbDevice>> {
         Ok(devs) => devs,
         Err(e) => {
             // Log the fallback for debugging purposes
-            eprintln!("vm-curator: libudev enumeration failed ({}), falling back to sysfs", e);
+            eprintln!("vm-foundry: libudev enumeration failed ({}), falling back to sysfs", e);
             enumerate_via_sysfs().unwrap_or_default()
         }
     };
@@ -285,7 +285,7 @@ pub enum UdevInstallResult {
 /// Generate udev rules content for USB passthrough
 pub fn generate_udev_rules(devices: &[UsbDevice]) -> String {
     let mut rules = String::new();
-    rules.push_str("# USB Passthrough rules for QEMU (managed by vm-curator)\n");
+    rules.push_str("# USB Passthrough rules for QEMU (managed by VM Foundry)\n");
     rules.push_str("# These rules allow non-root users to access USB devices for VM passthrough\n\n");
 
     // Collect unique vendor IDs to avoid duplicate rules
@@ -321,11 +321,11 @@ pub fn install_udev_rules(devices: &[UsbDevice]) -> UdevInstallResult {
     }
 
     let rules_content = generate_udev_rules(devices);
-    let rules_path = "/etc/udev/rules.d/99-vm-curator-usb.rules";
+    let rules_path = "/etc/udev/rules.d/99-vm-foundry-usb.rules";
 
     // Write rules to a temporary file with unique name (pid + timestamp)
     let temp_path = format!(
-        "/tmp/vm-curator-usb-rules-{}-{}.tmp",
+        "/tmp/vm-foundry-usb-rules-{}-{}.tmp",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

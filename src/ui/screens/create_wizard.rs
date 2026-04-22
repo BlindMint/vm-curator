@@ -12,6 +12,7 @@ use ratatui::{
 use std::thread;
 
 use crate::app::{App, BackgroundResult, WizardStep, WizardField, WizardQemuConfig};
+use crate::commands::qemu_system::{classify_bridge, is_lab_friendly_bridge, lab_friendly_bridges};
 use crate::metadata::QemuProfileStore;
 use crate::vm::{create_vm, BootMode};
 
@@ -2300,13 +2301,33 @@ fn get_field_notes(app: &App, focus: usize) -> String {
             } else {
                 format!("Allowed: {}", bridges.join(", "))
             };
+            let lab_bridges = lab_friendly_bridges(bridges);
+            let selected_bridge = app
+                .wizard_state
+                .as_ref()
+                .and_then(|s| s.qemu_config.bridge_name.as_deref())
+                .unwrap_or("qemubr0");
+            let bridge_class = classify_bridge(selected_bridge);
+            let exposure_note = if is_lab_friendly_bridge(selected_bridge) {
+                "This looks like a private libvirt bridge and is usually the safer choice for isolated labs."
+            } else {
+                "This looks like a host/LAN bridge. Guests attached here may be directly reachable from the connected network."
+            };
+            let lab_str = if lab_bridges.is_empty() {
+                "No private/libvirt-style bridges detected in the allowed set.".to_string()
+            } else {
+                format!("Lab-friendly bridges: {}", lab_bridges.join(", "))
+            };
             format!(
                 "Network bridge for {}.\n\n\
+                {}\n\n\
+                Selected: {} ({})\n\
+                {}\n\n\
                 {}\n\n\
                 The VM will get its own IP on the bridge network, \
                 providing full LAN access.\n\n\
                 Requires qemu-bridge-helper permissions and an allow rule in /etc/qemu/bridge.conf.",
-                os_name, bridges_str
+                os_name, bridges_str, selected_bridge, bridge_class, exposure_note, lab_str
             )
         },
         QemuField::PortForwards => format!(

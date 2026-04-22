@@ -131,6 +131,31 @@ pub struct NetworkCapabilities {
     pub allowed_bridges: Vec<String>,
 }
 
+/// Classify a bridge by likely usage so the UI can present safer guidance.
+pub fn classify_bridge(name: &str) -> &'static str {
+    if name.starts_with("virbr") {
+        "private/libvirt bridge"
+    } else if name.starts_with("br-") {
+        "container/custom bridge"
+    } else {
+        "host/LAN bridge"
+    }
+}
+
+/// Whether a bridge is a good default candidate for isolated lab use.
+pub fn is_lab_friendly_bridge(name: &str) -> bool {
+    name.starts_with("virbr")
+}
+
+/// Filter allowed bridges to those that are most likely private/internal lab bridges.
+pub fn lab_friendly_bridges(bridges: &[String]) -> Vec<String> {
+    bridges
+        .iter()
+        .filter(|bridge| is_lab_friendly_bridge(bridge))
+        .cloned()
+        .collect()
+}
+
 /// Detect all available networking capabilities
 pub fn detect_network_capabilities() -> NetworkCapabilities {
     let passt_available = is_passt_available();
@@ -268,7 +293,7 @@ fn parse_allowed_bridges(bridge_conf: &str, system_bridges: &[String]) -> Vec<St
 
 #[cfg(test)]
 mod tests {
-    use super::parse_allowed_bridges;
+    use super::{classify_bridge, lab_friendly_bridges, parse_allowed_bridges};
 
     #[test]
     fn test_parse_allowed_bridges_filters_to_existing_bridges() {
@@ -284,5 +309,26 @@ mod tests {
         let system_bridges = vec!["virbr0".to_string(), "virbr1".to_string()];
         let allowed = parse_allowed_bridges("allow all\n", &system_bridges);
         assert_eq!(allowed, system_bridges);
+    }
+
+    #[test]
+    fn test_classify_bridge() {
+        assert_eq!(classify_bridge("virbr0"), "private/libvirt bridge");
+        assert_eq!(classify_bridge("br-f37fef"), "container/custom bridge");
+        assert_eq!(classify_bridge("br0"), "host/LAN bridge");
+    }
+
+    #[test]
+    fn test_lab_friendly_bridges_prefers_virbr() {
+        let bridges = vec![
+            "virbr0".to_string(),
+            "br0".to_string(),
+            "virbr1".to_string(),
+            "br-deadbeef".to_string(),
+        ];
+        assert_eq!(
+            lab_friendly_bridges(&bridges),
+            vec!["virbr0".to_string(), "virbr1".to_string()]
+        );
     }
 }

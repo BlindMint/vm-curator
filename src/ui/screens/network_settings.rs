@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use crate::app::{AddPfStep, AddingPortForward, App, NetworkSettingsState};
+use crate::commands::qemu_system::{classify_bridge, is_lab_friendly_bridge, lab_friendly_bridges};
 use crate::vm::qemu_config::{PortForward, PortProtocol};
 
 /// Network adapter model options (same as create wizard)
@@ -142,22 +143,63 @@ pub fn render(app: &App, frame: &mut Frame) {
             Span::styled(bridges_str, Style::default().fg(bridges_color)),
         ]));
 
+        if let Some(selected_bridge) = ns.bridge_name.as_deref() {
+            lines.push(Line::from(vec![
+                Span::styled("  Selected:      ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("{} ({})", selected_bridge, classify_bridge(selected_bridge)),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+
+            let (risk_label, risk_color, guidance) = if is_lab_friendly_bridge(selected_bridge) {
+                (
+                    "safer for lab isolation",
+                    Color::Green,
+                    "Likely a private libvirt bridge. Good default for contained VM labs.",
+                )
+            } else {
+                (
+                    "high exposure",
+                    Color::Red,
+                    "Guests on host/LAN bridges can reach the attached network directly. Use only on trusted segments.",
+                )
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled("  Exposure:      ", Style::default().fg(Color::Yellow)),
+                Span::styled(risk_label, Style::default().fg(risk_color).add_modifier(Modifier::BOLD)),
+            ]));
+            lines.push(Line::styled(
+                format!("    {}", guidance),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+
+        let lab_bridges = lab_friendly_bridges(&caps.allowed_bridges);
+        if !lab_bridges.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("  Lab picks:     ", Style::default().fg(Color::Yellow)),
+                Span::styled(lab_bridges.join(", "), Style::default().fg(Color::Green)),
+            ]));
+        }
+
         // Setup guidance if incomplete
         if caps.bridge_helper_path.is_none() || !caps.bridge_helper_configured || caps.allowed_bridges.is_empty() {
             lines.push(Line::from(""));
             lines.push(Line::styled("  Setup needed:", Style::default().fg(Color::Yellow)));
             if caps.bridge_helper_path.is_none() {
-                lines.push(Line::styled("    Install: qemu-bridge-helper (part of QEMU)", Style::default().fg(Color::DarkGray)));
+                lines.push(Line::styled("    Install: qemu-bridge-helper (part of QEMU)", Style::default().fg(Color::Gray)));
             }
             if !caps.bridge_helper_configured {
-                lines.push(Line::styled("    Run: sudo setcap cap_net_admin+ep /usr/lib/qemu/qemu-bridge-helper", Style::default().fg(Color::DarkGray)));
+                lines.push(Line::styled("    Run: sudo setcap cap_net_admin+ep /usr/lib/qemu/qemu-bridge-helper", Style::default().fg(Color::Gray)));
             }
             if caps.allowed_bridges.is_empty() {
-                lines.push(Line::styled("    Allow a bridge: add 'allow <bridge>' to /etc/qemu/bridge.conf", Style::default().fg(Color::DarkGray)));
+                lines.push(Line::styled("    Allow a bridge: add 'allow <bridge>' to /etc/qemu/bridge.conf", Style::default().fg(Color::Gray)));
             }
             if caps.system_bridges.is_empty() {
-                lines.push(Line::styled("    Create bridge: sudo ip link add qemubr0 type bridge", Style::default().fg(Color::DarkGray)));
-                lines.push(Line::styled("    Enable:        sudo ip link set qemubr0 up", Style::default().fg(Color::DarkGray)));
+                lines.push(Line::styled("    Create bridge: sudo ip link add qemubr0 type bridge", Style::default().fg(Color::Gray)));
+                lines.push(Line::styled("    Enable:        sudo ip link set qemubr0 up", Style::default().fg(Color::Gray)));
             }
         }
 
@@ -165,7 +207,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         frame.render_widget(info, chunks[6]);
     } else if show_pf && !ns.port_forwards.is_empty() {
         let mut lines = Vec::new();
-        lines.push(Line::styled("  Current port forwarding rules:", Style::default().fg(Color::DarkGray)));
+        lines.push(Line::styled("  Current port forwarding rules:", Style::default().fg(Color::Gray)));
         for pf in &ns.port_forwards {
             lines.push(Line::from(format!("    {} {} -> {}", pf.protocol, pf.host_port, pf.guest_port)));
         }
@@ -175,7 +217,7 @@ pub fn render(app: &App, frame: &mut Frame) {
 
     // Help
     let help = Paragraph::new("[Enter] Apply  [Esc] Cancel  [j/k] Navigate  [Left/Right] Change")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[7]);
 }
@@ -208,7 +250,7 @@ fn render_port_forward_editor(_app: &App, ns: &NetworkSettingsState, frame: &mut
     // Rules list
     if ns.port_forwards.is_empty() {
         let msg = Paragraph::new("  No port forwarding rules configured.")
-            .style(Style::default().fg(Color::DarkGray));
+            .style(Style::default().fg(Color::Gray));
         frame.render_widget(msg, chunks[2]);
     } else {
         let mut lines = Vec::new();
@@ -231,12 +273,12 @@ fn render_port_forward_editor(_app: &App, ns: &NetworkSettingsState, frame: &mut
 
     // Presets
     let presets = Paragraph::new("  Presets: [1] SSH  [2] RDP  [3] HTTP  [4] HTTPS  [5] VNC")
-        .style(Style::default().fg(Color::DarkGray));
+        .style(Style::default().fg(Color::Gray));
     frame.render_widget(presets, chunks[4]);
 
     // Help
     let help = Paragraph::new("[a] Add  [d] Delete  [1-5] Preset  [Esc] Done")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[5]);
 }

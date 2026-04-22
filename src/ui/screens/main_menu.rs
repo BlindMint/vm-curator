@@ -68,18 +68,43 @@ fn render_title(app: &App, area: Rect, frame: &mut Frame) {
         library_path.display().to_string()
     };
 
-    let title = Paragraph::new(vec![Line::from(vec![
-        Span::styled(
-            " VM Curator ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("(QEMU VM Library in {})", display_path),
-            Style::default().fg(Color::Gray),
-        ),
-    ])])
+    let title_text = " VM Foundry ";
+    let full_status = format!(
+        "{} VMs | {} running | Desktop QEMU Lab Manager | {}",
+        app.vms.len(),
+        app.running_vms.len(),
+        display_path
+    );
+    let compact_status = format!(
+        "{} VMs | {} running | {}",
+        app.vms.len(),
+        app.running_vms.len(),
+        display_path
+    );
+    let available_width = area.width.saturating_sub(2) as usize;
+    let mut line_spans = vec![Span::styled(
+        title_text,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )];
+    let used_width = title_text.chars().count();
+    let status_text = if used_width + 1 + full_status.chars().count() <= available_width {
+        Some(full_status)
+    } else if used_width + 1 + compact_status.chars().count() <= available_width {
+        Some(compact_status)
+    } else {
+        None
+    };
+
+    if let Some(status_text) = status_text {
+        let status_width = status_text.chars().count();
+        let space_width = available_width.saturating_sub(used_width + status_width).max(1);
+        line_spans.push(Span::raw(" ".repeat(space_width)));
+        line_spans.push(Span::styled(status_text, Style::default().fg(Color::Gray)));
+    }
+
+    let title = Paragraph::new(vec![Line::from(line_spans)])
     .block(
         Block::default()
             .borders(Borders::ALL)

@@ -2,7 +2,7 @@
 #
 # This file contains contextual help text for the Settings screen.
 # Users can override entries by creating a file at:
-#   ~/.config/vm-curator/metadata/settings_help.toml
+#   ~/.config/vm-foundry/metadata/settings_help.toml
 
 [vm_library_path]
 title = "VM Library Path"
