@@ -25,7 +25,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         .title(format!(" {} - Configuration ", vm_name))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -243,7 +243,7 @@ pub fn render_raw_script(app: &App, frame: &mut Frame) {
         } else {
             Style::default().fg(Color::Cyan)
         })
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -389,7 +389,7 @@ pub fn render_edit_notes(app: &App, frame: &mut Frame) {
         } else {
             Style::default().fg(Color::Cyan)
         })
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);

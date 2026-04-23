@@ -400,7 +400,7 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
         .title(" Custom OS Entry ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -683,7 +683,7 @@ pub fn render_download(app: &App, frame: &mut Frame) {
         .title(" Downloading ISO ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -930,7 +930,7 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1384,7 +1384,7 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1728,7 +1728,7 @@ fn render_step_configure_disk(app: &App, frame: &mut Frame, area: Rect) {
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -2238,7 +2238,7 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -3445,7 +3445,7 @@ fn render_step_confirm(app: &App, frame: &mut Frame, area: Rect) {
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

@@ -292,7 +292,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         .title(format!(" {} - Management ", vm_name))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -429,7 +429,7 @@ pub fn render_boot_options(app: &App, frame: &mut Frame) {
         .title(" Boot Options ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -515,7 +515,7 @@ pub fn render_display_options(app: &App, frame: &mut Frame) {
         .title(format!(" Display Options (current: {}) ", current_display))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -627,7 +627,7 @@ pub fn render_snapshots(app: &App, frame: &mut Frame) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);

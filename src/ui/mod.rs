@@ -14,6 +14,10 @@ use crate::app::{App, BackgroundResult, ConfirmAction, InputMode, Screen, TextIn
 use crate::vm::{launch_vm_with_error_check, BootMode};
 use std::thread;
 
+pub(crate) fn modal_background() -> Color {
+    Color::Rgb(18, 22, 26)
+}
+
 /// Run the TUI application
 pub fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     loop {
@@ -1750,7 +1754,7 @@ fn render_usb_devices(app: &App, frame: &mut Frame) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -1841,7 +1845,7 @@ fn render_search(app: &App, frame: &mut Frame) {
         .title(" Search ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -1877,7 +1881,7 @@ fn render_file_browser(app: &App, frame: &mut Frame) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -2135,7 +2139,7 @@ fn render_text_input(app: &App, context: &TextInputContext, frame: &mut Frame) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -2244,7 +2248,7 @@ fn render_error_dialog(app: &App, frame: &mut Frame) {
         .title_bottom(" [↑/↓ or j/k] Scroll  [Enter/Esc] Close ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);

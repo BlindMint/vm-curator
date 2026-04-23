@@ -37,7 +37,7 @@ impl<'a> ConfirmDialog<'a> {
             .title(format!(" {} ", self.title))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow))
-            .style(Style::default().bg(Color::Black));
+            .style(Style::default().bg(crate::ui::modal_background()));
 
         let inner = block.inner(dialog_area);
         block.render(dialog_area, buf);

@@ -49,7 +49,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         .title(" Single GPU Passthrough Setup ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -315,7 +315,7 @@ pub fn render_instructions(app: &App, frame: &mut Frame) {
         .title(" Single GPU Passthrough Launch ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);

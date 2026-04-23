@@ -142,7 +142,7 @@ fn render_step_select_source(state: &ImportWizardState, frame: &mut Frame, area:
         .title(" Import VM - Select Source ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -223,7 +223,7 @@ fn render_step_select_vm(state: &ImportWizardState, frame: &mut Frame, area: Rec
         .title(format!(" Import VM - Select {} VM ", source_label))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -333,7 +333,7 @@ fn render_step_warnings(state: &ImportWizardState, frame: &mut Frame, area: Rect
         .title(" Import VM - Compatibility ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -426,7 +426,7 @@ fn render_step_configure_disk(state: &ImportWizardState, frame: &mut Frame, area
         .title(" Import VM - Disk Handling ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -554,7 +554,7 @@ fn render_step_review(state: &ImportWizardState, frame: &mut Frame, area: Rect) 
         .title(" Import VM - Review & Import ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
