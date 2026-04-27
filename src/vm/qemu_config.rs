@@ -139,7 +139,11 @@ pub struct PortForward {
 
 impl fmt::Display for PortForward {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {} -> {}", self.protocol, self.host_port, self.guest_port)
+        write!(
+            f,
+            "{} {} -> {}",
+            self.protocol, self.host_port, self.guest_port
+        )
     }
 }
 

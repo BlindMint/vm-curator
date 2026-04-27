@@ -57,7 +57,7 @@ impl Default for Config {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| home.join(".config"))
-            .join("vm-curator");
+            .join("vm-foundry");
 
         Self {
             vm_library_path: home.join("vm-space"),
@@ -114,8 +114,7 @@ impl Config {
                 .with_context(|| format!("Failed to create config directory {:?}", parent))?;
         }
 
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize config")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize config")?;
         std::fs::write(&config_path, content)
             .with_context(|| format!("Failed to write config to {:?}", config_path))?;
 
@@ -126,7 +125,7 @@ impl Config {
     pub fn config_file_path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from(".config"))
-            .join("vm-curator")
+            .join("vm-foundry")
             .join("config.toml")
     }
 }

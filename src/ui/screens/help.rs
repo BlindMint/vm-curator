@@ -1,79 +1,113 @@
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 /// Render the help screen
 pub fn render(frame: &mut Frame) {
     let area = frame.area();
-    let dialog_width = 55.min(area.width.saturating_sub(4));
-    let dialog_height = 28.min(area.height.saturating_sub(4));
+    let dialog_width = 78.min(area.width.saturating_sub(4));
+    let dialog_height = 32.min(area.height.saturating_sub(4));
 
     let dialog_area = centered_rect(dialog_width, dialog_height, area);
     frame.render_widget(Clear, dialog_area);
 
     let block = Block::default()
-        .title(" Help - Key Bindings ")
+        .title(" Help ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
 
-    let help_text = vec![
-        Line::from(Span::styled(
-            "Navigation",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        key_line("j / Down", "Move selection down"),
-        key_line("k / Up", "Move selection up"),
-        key_line("Enter", "Launch selected VM / Confirm"),
-        key_line("Esc", "Go back / Cancel"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Actions",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        key_line("m", "Open Management menu"),
-        key_line("x", "Stop selected VM (graceful shutdown)"),
-        key_line("c", "Create new VM"),
-        key_line("/", "Search/filter VMs"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Management Menu",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        key_line("Network", "Backend, port forwarding"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "General",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        key_line("?", "Show this help"),
-        key_line("q", "Quit application"),
-        Line::from(""),
+    let text = vec![
+        section("Main"),
+        key_line("j / k, arrows", "Move through lists and menus"),
+        key_line("Enter", "Launch, confirm, or open the selected item"),
+        key_line("Esc", "Back or cancel"),
+        key_line("/", "Search VMs"),
+        key_line("c", "Create a VM"),
+        key_line("i", "Import a VM"),
+        key_line("m", "Open the management menu"),
+        key_line("s", "Open settings"),
+        key_line("x", "Stop the selected VM"),
+        key_line("?", "Open this help"),
+        key_line("q", "Quit"),
+        blank(),
+        section("Create Wizard"),
+        key_line("Tab", "Move between edit fields and the OS filter"),
+        key_line("/", "Jump to the OS filter"),
+        key_line("Space", "Toggle selected options"),
+        key_line("Enter", "Confirm the current choice or advance"),
+        key_line("Esc", "Back to the previous step"),
+        key_line(
+            "Busy overlay",
+            "Long operations show a centered progress box",
+        ),
+        blank(),
+        section("Management"),
+        key_line("1-9", "Quick-select management and boot/display options"),
+        key_line(
+            "Sections",
+            "Run, Storage, Devices, Metadata, Advanced, Danger",
+        ),
+        key_line(
+            "Network",
+            "Bridge screens highlight lab-safe vs exposed bridges",
+        ),
+        blank(),
+        section("Settings"),
+        key_line(
+            "Enter / Space",
+            "Toggle, select, or edit the current setting",
+        ),
+        key_line(
+            "Headers",
+            "Section headers are informational and skipped in navigation",
+        ),
+        key_line(
+            "GPU modes",
+            "Disabled, Multiple GPUs, and Single GPU are exclusive modes",
+        ),
+        blank(),
+        section("Status"),
+        key_line(
+            "Top-right notifications",
+            "Short-lived success, warning, and error messages",
+        ),
+        key_line(
+            "Header",
+            "Shows VM counts, running status, and library path",
+        ),
+        blank(),
         Line::from(Span::styled(
             "Press any key to close",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )),
     ];
 
-    let para = Paragraph::new(help_text);
+    let para = Paragraph::new(text).wrap(Wrap { trim: false });
     frame.render_widget(para, inner);
 }
 
-fn key_line<'a>(key: &'a str, description: &'a str) -> Line<'a> {
+fn section(title: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        title.to_string(),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn blank() -> Line<'static> {
+    Line::from("")
+}
+
+fn key_line(key: &str, description: &str) -> Line<'static> {
     Line::from(vec![
-        Span::styled(
-            format!("  {:12}", key),
-            Style::default().fg(Color::Green),
-        ),
-        Span::raw(description),
+        Span::styled(format!("  {:18}", key), Style::default().fg(Color::Green)),
+        Span::raw(description.to_string()),
     ])
 }
 

@@ -3,8 +3,9 @@ pub mod widgets;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use ratatui::prelude::*;
 use ratatui::backend::CrosstermBackend;
+use ratatui::prelude::*;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use regex::Regex;
 use std::io::Stdout;
 use std::time::{Duration, Instant};
@@ -12,6 +13,10 @@ use std::time::{Duration, Instant};
 use crate::app::{App, BackgroundResult, ConfirmAction, InputMode, Screen, TextInputContext};
 use crate::vm::{launch_vm_with_error_check, BootMode};
 use std::thread;
+
+pub(crate) fn modal_background() -> Color {
+    Color::Rgb(18, 22, 26)
+}
 
 /// Run the TUI application
 pub fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
@@ -66,17 +71,15 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> Result<()> {
                 app.select_next();
             }
         }
-        MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
-            match &app.screen {
-                Screen::MainMenu => {
-                    handle_main_menu_click(app, mouse.column, mouse.row)?;
-                }
-                Screen::Confirm(action) => {
-                    handle_confirm_click(app, action.clone(), mouse.column, mouse.row)?;
-                }
-                _ => {}
+        MouseEventKind::Down(crossterm::event::MouseButton::Left) => match &app.screen {
+            Screen::MainMenu => {
+                handle_main_menu_click(app, mouse.column, mouse.row)?;
             }
-        }
+            Screen::Confirm(action) => {
+                handle_confirm_click(app, action.clone(), mouse.column, mouse.row)?;
+            }
+            _ => {}
+        },
         _ => {}
     }
     Ok(())
@@ -133,7 +136,12 @@ fn handle_main_menu_click(app: &mut App, click_x: u16, click_y: u16) -> Result<(
 }
 
 /// Handle mouse click in the confirmation dialog
-fn handle_confirm_click(app: &mut App, action: ConfirmAction, click_x: u16, click_y: u16) -> Result<()> {
+fn handle_confirm_click(
+    app: &mut App,
+    action: ConfirmAction,
+    click_x: u16,
+    click_y: u16,
+) -> Result<()> {
     if let Ok((term_width, term_height)) = crossterm::terminal::size() {
         let area = Rect::new(0, 0, term_width, term_height);
 
@@ -170,8 +178,10 @@ fn handle_confirm_click(app: &mut App, action: ConfirmAction, click_x: u16, clic
         }
 
         // Allow clicking outside the dialog to cancel
-        if click_x < dialog_x || click_x >= dialog_x + dialog_width
-            || click_y < dialog_y || click_y >= dialog_y + dialog_height
+        if click_x < dialog_x
+            || click_x >= dialog_x + dialog_width
+            || click_y < dialog_y
+            || click_y >= dialog_y + dialog_height
         {
             app.pop_screen();
         }
@@ -321,7 +331,11 @@ fn execute_confirm_action(app: &mut App, action: ConfirmAction) -> Result<()> {
                             app.set_status(format!("Force stopped {}", vm.display_name()));
                         }
                         Err(e) => {
-                            app.set_status(format!("Failed to force stop {}: {}", vm.display_name(), e));
+                            app.set_status(format!(
+                                "Failed to force stop {}: {}",
+                                vm.display_name(),
+                                e
+                            ));
                         }
                     }
                 }
@@ -338,141 +352,185 @@ fn render_dim_overlay(_frame: &mut Frame) {
     // The popup's Clear widget and borders provide sufficient contrast
 }
 
+fn render_modal_over_main<F>(app: &App, frame: &mut Frame, render_modal: F)
+where
+    F: FnOnce(&mut Frame),
+{
+    screens::main_menu::render(app, frame);
+    render_dim_overlay(frame);
+    render_modal(frame);
+}
+
 /// Render the current screen
 fn render(app: &App, frame: &mut Frame) {
     match &app.screen {
         Screen::MainMenu => screens::main_menu::render(app, frame),
         Screen::Management => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::management::render(app, frame);
+            render_modal_over_main(app, frame, |frame| screens::management::render(app, frame))
         }
-        Screen::Configuration => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::configuration::render(app, frame);
-        }
-        Screen::RawScript => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::configuration::render_raw_script(app, frame);
-        }
-        Screen::EditNotes => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::configuration::render_edit_notes(app, frame);
-        }
+        Screen::Configuration => render_modal_over_main(app, frame, |frame| {
+            screens::configuration::render(app, frame)
+        }),
+        Screen::RawScript => render_modal_over_main(app, frame, |frame| {
+            screens::configuration::render_raw_script(app, frame)
+        }),
+        Screen::EditNotes => render_modal_over_main(app, frame, |frame| {
+            screens::configuration::render_edit_notes(app, frame)
+        }),
         Screen::DetailedInfo => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_detailed_info(app, frame);
+            render_modal_over_main(app, frame, |frame| render_detailed_info(app, frame))
         }
-        Screen::Snapshots => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::management::render_snapshots(app, frame);
-        }
-        Screen::BootOptions => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::management::render_boot_options(app, frame);
-        }
-        Screen::DisplayOptions => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::management::render_display_options(app, frame);
-        }
+        Screen::Snapshots => render_modal_over_main(app, frame, |frame| {
+            screens::management::render_snapshots(app, frame)
+        }),
+        Screen::BootOptions => render_modal_over_main(app, frame, |frame| {
+            screens::management::render_boot_options(app, frame)
+        }),
+        Screen::DisplayOptions => render_modal_over_main(app, frame, |frame| {
+            screens::management::render_display_options(app, frame)
+        }),
         Screen::UsbDevices => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_usb_devices(app, frame);
+            render_modal_over_main(app, frame, |frame| render_usb_devices(app, frame))
         }
-        Screen::PciPassthrough => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::pci_passthrough::render(app, frame);
-        }
-        Screen::SharedFolders => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::shared_folders::render(app, frame);
-        }
-        Screen::SingleGpuSetup => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::single_gpu_setup::render(app, frame);
-        }
-        Screen::SingleGpuInstructions => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::single_gpu_setup::render_instructions(app, frame);
-        }
-        Screen::MultiGpuSetup => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::multi_gpu_setup::render(app, frame);
-        }
+        Screen::PciPassthrough => render_modal_over_main(app, frame, |frame| {
+            screens::pci_passthrough::render(app, frame)
+        }),
+        Screen::SharedFolders => render_modal_over_main(app, frame, |frame| {
+            screens::shared_folders::render(app, frame)
+        }),
+        Screen::SingleGpuSetup => render_modal_over_main(app, frame, |frame| {
+            screens::single_gpu_setup::render(app, frame)
+        }),
+        Screen::SingleGpuInstructions => render_modal_over_main(app, frame, |frame| {
+            screens::single_gpu_setup::render_instructions(app, frame)
+        }),
+        Screen::MultiGpuSetup => render_modal_over_main(app, frame, |frame| {
+            screens::multi_gpu_setup::render(app, frame)
+        }),
         Screen::Confirm(action) => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_confirm(app, action, frame);
+            render_modal_over_main(app, frame, |frame| render_confirm(app, action, frame))
         }
-        Screen::Help => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::help::render(frame);
-        }
-        Screen::Search => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_search(app, frame);
-        }
+        Screen::Help => render_modal_over_main(app, frame, screens::help::render),
+        Screen::Search => render_modal_over_main(app, frame, |frame| render_search(app, frame)),
         Screen::FileBrowser => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_file_browser(app, frame);
+            render_modal_over_main(app, frame, |frame| render_file_browser(app, frame))
         }
         Screen::TextInput(context) => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_text_input(app, context, frame);
+            render_modal_over_main(app, frame, |frame| render_text_input(app, context, frame))
         }
         Screen::ErrorDialog => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            render_error_dialog(app, frame);
+            render_modal_over_main(app, frame, |frame| render_error_dialog(app, frame))
         }
-        Screen::CreateWizard => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::create_wizard::render(app, frame);
-        }
-        Screen::CreateWizardCustomOs => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::create_wizard::render_custom_os(app, frame);
-        }
-        Screen::CreateWizardDownload => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::create_wizard::render_download(app, frame);
-        }
-        Screen::NetworkSettings => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::network_settings::render(app, frame);
-        }
+        Screen::CreateWizard => render_modal_over_main(app, frame, |frame| {
+            screens::create_wizard::render(app, frame)
+        }),
+        Screen::CreateWizardCustomOs => render_modal_over_main(app, frame, |frame| {
+            screens::create_wizard::render_custom_os(app, frame)
+        }),
+        Screen::CreateWizardDownload => render_modal_over_main(app, frame, |frame| {
+            screens::create_wizard::render_download(app, frame)
+        }),
+        Screen::NetworkSettings => render_modal_over_main(app, frame, |frame| {
+            screens::network_settings::render(app, frame)
+        }),
         Screen::Settings => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::settings::render(app, frame);
+            render_modal_over_main(app, frame, |frame| screens::settings::render(app, frame))
         }
-        Screen::ImportWizard => {
-            screens::main_menu::render(app, frame);
-            render_dim_overlay(frame);
-            screens::import_wizard::render(app, frame);
-        }
+        Screen::ImportWizard => render_modal_over_main(app, frame, |frame| {
+            screens::import_wizard::render(app, frame)
+        }),
     }
+
+    render_global_notification(app, frame);
+    render_loading_overlay(app, frame);
+}
+
+fn render_global_notification(app: &App, frame: &mut Frame) {
+    let Some((message, color)) = current_notification(app) else {
+        return;
+    };
+
+    let area = frame.area();
+    if area.width < 8 || area.height < 3 {
+        return;
+    }
+
+    let message_width = message.chars().count() as u16;
+    let desired_width = (message_width + 4).max(24);
+    let max_width = area.width.saturating_sub(2).max(8);
+    let width = desired_width.min(max_width);
+    let x = area.width.saturating_sub(width + 1);
+    let notification_area = Rect::new(x, 0, width, 3.min(area.height));
+
+    frame.render_widget(Clear, notification_area);
+    let notification = Paragraph::new(message)
+        .style(Style::default().fg(color))
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+    frame.render_widget(notification, notification_area);
+}
+
+fn current_notification(app: &App) -> Option<(String, Color)> {
+    if let Some(ref msg) = app.status_message {
+        return Some((msg.clone(), Color::Green));
+    }
+
+    if let Some((id, sent_at)) = app.stopping_vms.iter().next() {
+        let elapsed = sent_at.elapsed().as_secs();
+        let vm_name = app
+            .vms
+            .iter()
+            .find(|vm| &vm.id == id)
+            .map(|vm| vm.display_name())
+            .unwrap_or_else(|| id.clone());
+        let msg = if elapsed >= 10 {
+            format!("Stopping {}... (press x to force stop)", vm_name)
+        } else {
+            format!("Stopping {}...", vm_name)
+        };
+        return Some((msg, Color::Yellow));
+    }
+
+    None
+}
+
+fn render_loading_overlay(app: &App, frame: &mut Frame) {
+    if !app.loading {
+        return;
+    }
+
+    let area = frame.area();
+    if area.width < 24 || area.height < 5 {
+        return;
+    }
+
+    let message = app.loading_message.as_deref().unwrap_or("Working...");
+    let message_width = message.chars().count() as u16;
+    let width = (message_width + 10).clamp(32, area.width.saturating_sub(4));
+    let height = 5;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let overlay_area = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, overlay_area);
+    let overlay = Paragraph::new(message)
+        .alignment(Alignment::Center)
+        .style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Busy ")
+                .border_style(Style::default().fg(Color::Yellow)),
+        );
+    frame.render_widget(overlay, overlay_area);
 }
 
 /// Handle key input
@@ -485,7 +543,17 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
     // Global quit with q/Q (except in text input modes where q might be typed)
     if (key.code == KeyCode::Char('q') || key.code == KeyCode::Char('Q'))
-        && !matches!(app.screen, Screen::Search | Screen::TextInput(_) | Screen::RawScript | Screen::EditNotes | Screen::CreateWizard | Screen::CreateWizardCustomOs | Screen::NetworkSettings | Screen::ImportWizard)
+        && !matches!(
+            app.screen,
+            Screen::Search
+                | Screen::TextInput(_)
+                | Screen::RawScript
+                | Screen::EditNotes
+                | Screen::CreateWizard
+                | Screen::CreateWizardCustomOs
+                | Screen::NetworkSettings
+                | Screen::ImportWizard
+        )
     {
         app.should_quit = true;
         return Ok(());
@@ -517,7 +585,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         Screen::CreateWizardCustomOs => screens::create_wizard::handle_custom_os_key(app, key)?,
         Screen::CreateWizardDownload => screens::create_wizard::handle_download_key(app, key)?,
         Screen::NetworkSettings => screens::network_settings::handle_key(app, key)?,
-        Screen::Settings => { screens::settings::handle_input(app, key)?; }
+        Screen::Settings => {
+            screens::settings::handle_input(app, key)?;
+        }
         Screen::ImportWizard => screens::import_wizard::handle_key(app, key)?,
     }
 
@@ -561,6 +631,9 @@ fn handle_main_menu(app: &mut App, key: KeyEvent) -> Result<()> {
             app.start_import_wizard();
         }
         KeyCode::Char('s') | KeyCode::Char('S') => {
+            if app.settings_selected == 0 {
+                app.settings_selected = 1;
+            }
             app.push_screen(Screen::Settings);
         }
         KeyCode::Char('x') | KeyCode::Char('X') => {
@@ -597,7 +670,16 @@ fn handle_management(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Esc => app.pop_screen(),
         KeyCode::Char('j') | KeyCode::Down => app.menu_next(item_count),
         KeyCode::Char('k') | KeyCode::Up => app.menu_prev(),
-        KeyCode::Enter | KeyCode::Char('1') | KeyCode::Char('2') | KeyCode::Char('3') | KeyCode::Char('4') | KeyCode::Char('5') | KeyCode::Char('6') | KeyCode::Char('7') | KeyCode::Char('8') | KeyCode::Char('9') => {
+        KeyCode::Enter
+        | KeyCode::Char('1')
+        | KeyCode::Char('2')
+        | KeyCode::Char('3')
+        | KeyCode::Char('4')
+        | KeyCode::Char('5')
+        | KeyCode::Char('6')
+        | KeyCode::Char('7')
+        | KeyCode::Char('8')
+        | KeyCode::Char('9') => {
             // Map number keys to menu index
             let selected_idx = match key.code {
                 KeyCode::Char('1') => 0,
@@ -622,7 +704,9 @@ fn handle_management(app: &mut App, key: KeyEvent) -> Result<()> {
                                 if app.selected_vm_pid().is_some() {
                                     if let Some(sent_at) = app.stopping_vms.get(&vm.id) {
                                         if sent_at.elapsed() > Duration::from_secs(10) {
-                                            app.push_screen(Screen::Confirm(ConfirmAction::ForceStopVm));
+                                            app.push_screen(Screen::Confirm(
+                                                ConfirmAction::ForceStopVm,
+                                            ));
                                         } else {
                                             app.set_status(format!(
                                                 "Waiting for {} to shut down...",
@@ -681,27 +765,39 @@ fn handle_management(app: &mut App, key: KeyEvent) -> Result<()> {
                             // Initialize network settings state from current VM config
                             if let Some(vm) = app.selected_vm() {
                                 let net = vm.config.network.as_ref();
-                                let model = net.map(|n| n.model.clone()).unwrap_or_else(|| "e1000".to_string());
-                                let (backend, bridge_name) = net.map(|n| {
-                                    match &n.backend {
-                                        crate::vm::qemu_config::NetworkBackend::User => ("user".to_string(), None),
-                                        crate::vm::qemu_config::NetworkBackend::Passt => ("passt".to_string(), None),
-                                        crate::vm::qemu_config::NetworkBackend::Bridge(name) => ("bridge".to_string(), Some(name.clone())),
-                                        crate::vm::qemu_config::NetworkBackend::None => ("none".to_string(), None),
-                                    }
-                                }).unwrap_or_else(|| ("user".to_string(), None));
-                                let port_forwards = net.map(|n| n.port_forwards.clone()).unwrap_or_default();
+                                let model = net
+                                    .map(|n| n.model.clone())
+                                    .unwrap_or_else(|| "e1000".to_string());
+                                let (backend, bridge_name) = net
+                                    .map(|n| match &n.backend {
+                                        crate::vm::qemu_config::NetworkBackend::User => {
+                                            ("user".to_string(), None)
+                                        }
+                                        crate::vm::qemu_config::NetworkBackend::Passt => {
+                                            ("passt".to_string(), None)
+                                        }
+                                        crate::vm::qemu_config::NetworkBackend::Bridge(name) => {
+                                            ("bridge".to_string(), Some(name.clone()))
+                                        }
+                                        crate::vm::qemu_config::NetworkBackend::None => {
+                                            ("none".to_string(), None)
+                                        }
+                                    })
+                                    .unwrap_or_else(|| ("user".to_string(), None));
+                                let port_forwards =
+                                    net.map(|n| n.port_forwards.clone()).unwrap_or_default();
 
-                                app.network_settings_state = Some(crate::app::NetworkSettingsState {
-                                    model,
-                                    backend,
-                                    bridge_name,
-                                    port_forwards,
-                                    selected_field: 0,
-                                    editing_port_forwards: false,
-                                    pf_selected: 0,
-                                    adding_pf: None,
-                                });
+                                app.network_settings_state =
+                                    Some(crate::app::NetworkSettingsState {
+                                        model,
+                                        backend,
+                                        bridge_name,
+                                        port_forwards,
+                                        selected_field: 0,
+                                        editing_port_forwards: false,
+                                        pf_selected: 0,
+                                        adding_pf: None,
+                                    });
                                 app.push_screen(Screen::NetworkSettings);
                             }
                         }
@@ -790,8 +886,11 @@ fn handle_raw_script(app: &mut App, key: KeyEvent) -> Result<()> {
             if app.script_editor_cursor.0 > 0 {
                 app.script_editor_cursor.0 -= 1;
                 // Adjust column if new line is shorter
-                let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                    .map(|l| l.len()).unwrap_or(0);
+                let line_len = app
+                    .script_editor_lines
+                    .get(app.script_editor_cursor.0)
+                    .map(|l| l.len())
+                    .unwrap_or(0);
                 if app.script_editor_cursor.1 > line_len {
                     app.script_editor_cursor.1 = line_len;
                 }
@@ -805,15 +904,19 @@ fn handle_raw_script(app: &mut App, key: KeyEvent) -> Result<()> {
             if app.script_editor_cursor.0 < total_lines.saturating_sub(1) {
                 app.script_editor_cursor.0 += 1;
                 // Adjust column if new line is shorter
-                let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                    .map(|l| l.len()).unwrap_or(0);
+                let line_len = app
+                    .script_editor_lines
+                    .get(app.script_editor_cursor.0)
+                    .map(|l| l.len())
+                    .unwrap_or(0);
                 if app.script_editor_cursor.1 > line_len {
                     app.script_editor_cursor.1 = line_len;
                 }
                 // Scroll down if needed (assuming ~35 visible lines)
                 let visible_height = 35usize;
                 if app.script_editor_cursor.0 >= app.raw_script_scroll as usize + visible_height {
-                    app.raw_script_scroll = (app.script_editor_cursor.0 - visible_height + 1) as u16;
+                    app.raw_script_scroll =
+                        (app.script_editor_cursor.0 - visible_height + 1) as u16;
                 }
             }
         }
@@ -823,8 +926,11 @@ fn handle_raw_script(app: &mut App, key: KeyEvent) -> Result<()> {
             } else if app.script_editor_cursor.0 > 0 {
                 // Move to end of previous line
                 app.script_editor_cursor.0 -= 1;
-                app.script_editor_cursor.1 = app.script_editor_lines.get(app.script_editor_cursor.0)
-                    .map(|l| l.len()).unwrap_or(0);
+                app.script_editor_cursor.1 = app
+                    .script_editor_lines
+                    .get(app.script_editor_cursor.0)
+                    .map(|l| l.len())
+                    .unwrap_or(0);
             }
             // Adjust horizontal scroll
             if app.script_editor_cursor.1 < app.script_editor_h_scroll {
@@ -832,8 +938,11 @@ fn handle_raw_script(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
         (KeyCode::Right, _) => {
-            let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                .map(|l| l.len()).unwrap_or(0);
+            let line_len = app
+                .script_editor_lines
+                .get(app.script_editor_cursor.0)
+                .map(|l| l.len())
+                .unwrap_or(0);
             if app.script_editor_cursor.1 < line_len {
                 app.script_editor_cursor.1 += 1;
             } else if app.script_editor_cursor.0 < total_lines.saturating_sub(1) {
@@ -852,8 +961,11 @@ fn handle_raw_script(app: &mut App, key: KeyEvent) -> Result<()> {
             app.script_editor_h_scroll = 0;
         }
         (KeyCode::End, _) => {
-            let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                .map(|l| l.len()).unwrap_or(0);
+            let line_len = app
+                .script_editor_lines
+                .get(app.script_editor_cursor.0)
+                .map(|l| l.len())
+                .unwrap_or(0);
             app.script_editor_cursor.1 = line_len;
         }
         (KeyCode::PageUp, _) => {
@@ -861,19 +973,27 @@ fn handle_raw_script(app: &mut App, key: KeyEvent) -> Result<()> {
             app.script_editor_cursor.0 = app.script_editor_cursor.0.saturating_sub(jump);
             app.raw_script_scroll = app.raw_script_scroll.saturating_sub(jump as u16);
             // Adjust column
-            let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                .map(|l| l.len()).unwrap_or(0);
+            let line_len = app
+                .script_editor_lines
+                .get(app.script_editor_cursor.0)
+                .map(|l| l.len())
+                .unwrap_or(0);
             if app.script_editor_cursor.1 > line_len {
                 app.script_editor_cursor.1 = line_len;
             }
         }
         (KeyCode::PageDown, _) => {
             let jump = 20;
-            app.script_editor_cursor.0 = (app.script_editor_cursor.0 + jump).min(total_lines.saturating_sub(1));
-            app.raw_script_scroll = (app.raw_script_scroll + jump as u16).min(total_lines.saturating_sub(1) as u16);
+            app.script_editor_cursor.0 =
+                (app.script_editor_cursor.0 + jump).min(total_lines.saturating_sub(1));
+            app.raw_script_scroll =
+                (app.raw_script_scroll + jump as u16).min(total_lines.saturating_sub(1) as u16);
             // Adjust column
-            let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                .map(|l| l.len()).unwrap_or(0);
+            let line_len = app
+                .script_editor_lines
+                .get(app.script_editor_cursor.0)
+                .map(|l| l.len())
+                .unwrap_or(0);
             if app.script_editor_cursor.1 > line_len {
                 app.script_editor_cursor.1 = line_len;
             }
@@ -922,7 +1042,10 @@ fn handle_raw_script(app: &mut App, key: KeyEvent) -> Result<()> {
                 } else if line_idx < total_lines - 1 {
                     // Join with next line
                     let next_line = app.script_editor_lines.remove(line_idx + 1);
-                    app.script_editor_lines.get_mut(line_idx).unwrap().push_str(&next_line);
+                    app.script_editor_lines
+                        .get_mut(line_idx)
+                        .unwrap()
+                        .push_str(&next_line);
                     app.script_editor_modified = true;
                 }
             }
@@ -980,8 +1103,11 @@ fn handle_edit_notes(app: &mut App, key: KeyEvent) -> Result<()> {
         (KeyCode::Up, _) => {
             if app.script_editor_cursor.0 > 0 {
                 app.script_editor_cursor.0 -= 1;
-                let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                    .map(|l| l.len()).unwrap_or(0);
+                let line_len = app
+                    .script_editor_lines
+                    .get(app.script_editor_cursor.0)
+                    .map(|l| l.len())
+                    .unwrap_or(0);
                 if app.script_editor_cursor.1 > line_len {
                     app.script_editor_cursor.1 = line_len;
                 }
@@ -993,14 +1119,18 @@ fn handle_edit_notes(app: &mut App, key: KeyEvent) -> Result<()> {
         (KeyCode::Down, _) => {
             if app.script_editor_cursor.0 < total_lines.saturating_sub(1) {
                 app.script_editor_cursor.0 += 1;
-                let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                    .map(|l| l.len()).unwrap_or(0);
+                let line_len = app
+                    .script_editor_lines
+                    .get(app.script_editor_cursor.0)
+                    .map(|l| l.len())
+                    .unwrap_or(0);
                 if app.script_editor_cursor.1 > line_len {
                     app.script_editor_cursor.1 = line_len;
                 }
                 let visible_height = 35usize;
                 if app.script_editor_cursor.0 >= app.raw_script_scroll as usize + visible_height {
-                    app.raw_script_scroll = (app.script_editor_cursor.0 - visible_height + 1) as u16;
+                    app.raw_script_scroll =
+                        (app.script_editor_cursor.0 - visible_height + 1) as u16;
                 }
             }
         }
@@ -1009,16 +1139,22 @@ fn handle_edit_notes(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.script_editor_cursor.1 -= 1;
             } else if app.script_editor_cursor.0 > 0 {
                 app.script_editor_cursor.0 -= 1;
-                app.script_editor_cursor.1 = app.script_editor_lines.get(app.script_editor_cursor.0)
-                    .map(|l| l.len()).unwrap_or(0);
+                app.script_editor_cursor.1 = app
+                    .script_editor_lines
+                    .get(app.script_editor_cursor.0)
+                    .map(|l| l.len())
+                    .unwrap_or(0);
             }
             if app.script_editor_cursor.1 < app.script_editor_h_scroll {
                 app.script_editor_h_scroll = app.script_editor_cursor.1;
             }
         }
         (KeyCode::Right, _) => {
-            let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                .map(|l| l.len()).unwrap_or(0);
+            let line_len = app
+                .script_editor_lines
+                .get(app.script_editor_cursor.0)
+                .map(|l| l.len())
+                .unwrap_or(0);
             if app.script_editor_cursor.1 < line_len {
                 app.script_editor_cursor.1 += 1;
             } else if app.script_editor_cursor.0 < total_lines.saturating_sub(1) {
@@ -1035,26 +1171,37 @@ fn handle_edit_notes(app: &mut App, key: KeyEvent) -> Result<()> {
             app.script_editor_h_scroll = 0;
         }
         (KeyCode::End, _) => {
-            let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                .map(|l| l.len()).unwrap_or(0);
+            let line_len = app
+                .script_editor_lines
+                .get(app.script_editor_cursor.0)
+                .map(|l| l.len())
+                .unwrap_or(0);
             app.script_editor_cursor.1 = line_len;
         }
         (KeyCode::PageUp, _) => {
             let jump = 20;
             app.script_editor_cursor.0 = app.script_editor_cursor.0.saturating_sub(jump);
             app.raw_script_scroll = app.raw_script_scroll.saturating_sub(jump as u16);
-            let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                .map(|l| l.len()).unwrap_or(0);
+            let line_len = app
+                .script_editor_lines
+                .get(app.script_editor_cursor.0)
+                .map(|l| l.len())
+                .unwrap_or(0);
             if app.script_editor_cursor.1 > line_len {
                 app.script_editor_cursor.1 = line_len;
             }
         }
         (KeyCode::PageDown, _) => {
             let jump = 20;
-            app.script_editor_cursor.0 = (app.script_editor_cursor.0 + jump).min(total_lines.saturating_sub(1));
-            app.raw_script_scroll = (app.raw_script_scroll + jump as u16).min(total_lines.saturating_sub(1) as u16);
-            let line_len = app.script_editor_lines.get(app.script_editor_cursor.0)
-                .map(|l| l.len()).unwrap_or(0);
+            app.script_editor_cursor.0 =
+                (app.script_editor_cursor.0 + jump).min(total_lines.saturating_sub(1));
+            app.raw_script_scroll =
+                (app.raw_script_scroll + jump as u16).min(total_lines.saturating_sub(1) as u16);
+            let line_len = app
+                .script_editor_lines
+                .get(app.script_editor_cursor.0)
+                .map(|l| l.len())
+                .unwrap_or(0);
             if app.script_editor_cursor.1 > line_len {
                 app.script_editor_cursor.1 = line_len;
             }
@@ -1101,7 +1248,10 @@ fn handle_edit_notes(app: &mut App, key: KeyEvent) -> Result<()> {
                     app.script_editor_modified = true;
                 } else if line_idx < total_lines - 1 {
                     let next_line = app.script_editor_lines.remove(line_idx + 1);
-                    app.script_editor_lines.get_mut(line_idx).unwrap().push_str(&next_line);
+                    app.script_editor_lines
+                        .get_mut(line_idx)
+                        .unwrap()
+                        .push_str(&next_line);
                     app.script_editor_modified = true;
                 }
             }
@@ -1163,18 +1313,23 @@ fn handle_snapshots(app: &mut App, key: KeyEvent) -> Result<()> {
                     app.set_status("Warning: VM is running. Snapshot may be inconsistent.");
                 }
                 // Pre-fill with timestamp-based suggestion
-                app.text_input_buffer = format!("snapshot-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+                app.text_input_buffer =
+                    format!("snapshot-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"));
                 app.push_screen(Screen::TextInput(TextInputContext::SnapshotName));
             }
         }
         KeyCode::Char('r') => {
             if let Some(snap) = app.snapshots.get(app.selected_snapshot) {
-                app.push_screen(Screen::Confirm(ConfirmAction::RestoreSnapshot(snap.name.clone())));
+                app.push_screen(Screen::Confirm(ConfirmAction::RestoreSnapshot(
+                    snap.name.clone(),
+                )));
             }
         }
         KeyCode::Char('d') => {
             if let Some(snap) = app.snapshots.get(app.selected_snapshot) {
-                app.push_screen(Screen::Confirm(ConfirmAction::DeleteSnapshot(snap.name.clone())));
+                app.push_screen(Screen::Confirm(ConfirmAction::DeleteSnapshot(
+                    snap.name.clone(),
+                )));
             }
         }
         _ => {}
@@ -1189,7 +1344,12 @@ fn handle_boot_options(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Esc => app.pop_screen(),
         KeyCode::Char('j') | KeyCode::Down => app.menu_next(5),
         KeyCode::Char('k') | KeyCode::Up => app.menu_prev(),
-        KeyCode::Enter | KeyCode::Char('1') | KeyCode::Char('2') | KeyCode::Char('3') | KeyCode::Char('4') | KeyCode::Char('5') => {
+        KeyCode::Enter
+        | KeyCode::Char('1')
+        | KeyCode::Char('2')
+        | KeyCode::Char('3')
+        | KeyCode::Char('4')
+        | KeyCode::Char('5') => {
             let item = match key.code {
                 KeyCode::Char('1') => 0,
                 KeyCode::Char('2') => 1,
@@ -1236,15 +1396,23 @@ fn handle_boot_options(app: &mut App, key: KeyEvent) -> Result<()> {
 fn handle_display_options(app: &mut App, key: KeyEvent) -> Result<()> {
     let display_options = screens::management::get_display_options(app);
     let option_count = display_options.len();
+    let return_index = screens::management::menu_index_for_action(
+        app,
+        screens::management::MenuAction::ChangeDisplay,
+    );
 
     match key.code {
         KeyCode::Esc => {
-            app.selected_menu_item = 3; // Reset to Change Display position in management menu
+            app.selected_menu_item = return_index;
             app.pop_screen();
         }
         KeyCode::Char('j') | KeyCode::Down => app.menu_next(option_count),
         KeyCode::Char('k') | KeyCode::Up => app.menu_prev(),
-        KeyCode::Enter | KeyCode::Char('1') | KeyCode::Char('2') | KeyCode::Char('3') | KeyCode::Char('4') => {
+        KeyCode::Enter
+        | KeyCode::Char('1')
+        | KeyCode::Char('2')
+        | KeyCode::Char('3')
+        | KeyCode::Char('4') => {
             let item = match key.code {
                 KeyCode::Char('1') => 0,
                 KeyCode::Char('2') => 1,
@@ -1260,7 +1428,9 @@ fn handle_display_options(app: &mut App, key: KeyEvent) -> Result<()> {
                     match update_vm_display(&vm.launch_script, &display_name) {
                         Ok(()) => {
                             // Show spice-app warning if viewer not installed
-                            if display_name.contains("spice") && !crate::commands::qemu_system::is_spice_viewer_available() {
+                            if display_name.contains("spice")
+                                && !crate::commands::qemu_system::is_spice_viewer_available()
+                            {
                                 app.set_status(format!("Display changed to {}. Warning: virt-viewer/remote-viewer not found!", display_name));
                             } else {
                                 app.set_status(format!("Display changed to {}", display_name));
@@ -1273,7 +1443,7 @@ fn handle_display_options(app: &mut App, key: KeyEvent) -> Result<()> {
                         }
                     }
                 }
-                app.selected_menu_item = 3;
+                app.selected_menu_item = return_index;
                 app.pop_screen();
             }
         }
@@ -1292,13 +1462,15 @@ fn update_vm_display(script_path: &std::path::Path, new_display: &str) -> Result
 
     let new_content = if display_re.is_match(&content) {
         // Replace existing -display setting, preserving gl=on if present
-        display_re.replace_all(&content, |caps: &regex::Captures| {
-            if caps.get(2).is_some() {
-                format!("-display {},gl=on", new_display)
-            } else {
-                format!("-display {}", new_display)
-            }
-        }).to_string()
+        display_re
+            .replace_all(&content, |caps: &regex::Captures| {
+                if caps.get(2).is_some() {
+                    format!("-display {},gl=on", new_display)
+                } else {
+                    format!("-display {}", new_display)
+                }
+            })
+            .to_string()
     } else {
         // No -display found, this shouldn't happen for wizard-generated scripts
         // but handle gracefully
@@ -1310,13 +1482,18 @@ fn update_vm_display(script_path: &std::path::Path, new_display: &str) -> Result
 }
 
 fn handle_usb_devices(app: &mut App, key: KeyEvent) -> Result<()> {
+    let return_index = screens::management::menu_index_for_action(
+        app,
+        screens::management::MenuAction::UsbPassthrough,
+    );
     match key.code {
         KeyCode::Esc => {
-            app.selected_menu_item = 2; // Reset to USB Passthrough position in management menu
+            app.selected_menu_item = return_index;
             app.pop_screen();
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            app.selected_menu_item = (app.selected_menu_item + 1).min(app.usb_devices.len().saturating_sub(1));
+            app.selected_menu_item =
+                (app.selected_menu_item + 1).min(app.usb_devices.len().saturating_sub(1));
         }
         KeyCode::Char('k') | KeyCode::Up => {
             if app.selected_menu_item > 0 {
@@ -1363,7 +1540,9 @@ fn handle_usb_devices(app: &mut App, key: KeyEvent) -> Result<()> {
                         if let Some(vm) = app.selected_vm() {
                             if crate::hardware::scripts_exist(&vm.path) {
                                 // Try with in-memory config first, fall back to saved config
-                                let regen_result = if let Some(config) = app.single_gpu_config.as_ref() {
+                                let regen_result = if let Some(config) =
+                                    app.single_gpu_config.as_ref()
+                                {
                                     crate::vm::single_gpu_scripts::regenerate_if_exists(vm, config)
                                 } else {
                                     crate::vm::single_gpu_scripts::regenerate_from_saved_config(vm)
@@ -1406,7 +1585,9 @@ fn handle_usb_devices(app: &mut App, key: KeyEvent) -> Result<()> {
                 // The install function will handle elevation
                 match crate::hardware::install_udev_rules(&selected_devices) {
                     crate::hardware::UdevInstallResult::Success => {
-                        app.set_status("USB permissions installed! Devices should now work without sudo.");
+                        app.set_status(
+                            "USB permissions installed! Devices should now work without sudo.",
+                        );
                     }
                     crate::hardware::UdevInstallResult::NeedsReboot => {
                         app.set_status("Rules installed. Please unplug/replug devices or reboot.");
@@ -1477,7 +1658,8 @@ fn render_detailed_info(app: &App, frame: &mut Frame) {
     let dialog_area = centered_rect(dialog_width, dialog_height, area);
     frame.render_widget(ratatui::widgets::Clear, dialog_area);
 
-    let vm_name = app.selected_vm()
+    let vm_name = app
+        .selected_vm()
         .map(|vm| vm.display_name())
         .unwrap_or_else(|| "Unknown".to_string());
 
@@ -1495,40 +1677,55 @@ fn render_confirm(app: &App, action: &ConfirmAction, frame: &mut Frame) {
 
     let (title, message) = match action {
         ConfirmAction::LaunchVm => {
-            let name = app.selected_vm()
+            let name = app
+                .selected_vm()
                 .map(|vm| vm.display_name())
                 .unwrap_or_else(|| "VM".to_string());
             ("Launch VM", format!("Launch {}?", name))
         }
-        ConfirmAction::ResetVm => {
-            ("Reset VM", "This will reset the VM to its initial state. All changes will be lost. Continue?".to_string())
-        }
+        ConfirmAction::ResetVm => (
+            "Reset VM",
+            "This will reset the VM to its initial state. All changes will be lost. Continue?"
+                .to_string(),
+        ),
         ConfirmAction::DeleteVm => {
-            let name = app.selected_vm()
+            let name = app
+                .selected_vm()
                 .map(|vm| vm.display_name())
                 .unwrap_or_else(|| "VM".to_string());
-            ("Delete VM", format!("Delete {}? This will move the VM to trash.", name))
+            (
+                "Delete VM",
+                format!("Delete {}? This will move the VM to trash.", name),
+            )
         }
-        ConfirmAction::RestoreSnapshot(name) => {
-            ("Restore Snapshot", format!("Restore snapshot '{}'? Current state will be lost.", name))
-        }
-        ConfirmAction::DeleteSnapshot(name) => {
-            ("Delete Snapshot", format!("Delete snapshot '{}'? This cannot be undone.", name))
-        }
-        ConfirmAction::DiscardScriptChanges | ConfirmAction::DiscardNotesChanges => {
-            ("Discard Changes", "You have unsaved changes. Discard them?".to_string())
-        }
+        ConfirmAction::RestoreSnapshot(name) => (
+            "Restore Snapshot",
+            format!("Restore snapshot '{}'? Current state will be lost.", name),
+        ),
+        ConfirmAction::DeleteSnapshot(name) => (
+            "Delete Snapshot",
+            format!("Delete snapshot '{}'? This cannot be undone.", name),
+        ),
+        ConfirmAction::DiscardScriptChanges | ConfirmAction::DiscardNotesChanges => (
+            "Discard Changes",
+            "You have unsaved changes. Discard them?".to_string(),
+        ),
         ConfirmAction::StopVm => {
-            let name = app.selected_vm()
+            let name = app
+                .selected_vm()
                 .map(|vm| vm.display_name())
                 .unwrap_or_else(|| "VM".to_string());
             ("Stop VM", format!("Stop {}?", name))
         }
         ConfirmAction::ForceStopVm => {
-            let name = app.selected_vm()
+            let name = app
+                .selected_vm()
                 .map(|vm| vm.display_name())
                 .unwrap_or_else(|| "VM".to_string());
-            ("Force Stop VM", format!("Force stop {}? This may cause data loss.", name))
+            (
+                "Force Stop VM",
+                format!("Force stop {}? This may cause data loss.", name),
+            )
         }
     };
 
@@ -1536,8 +1733,8 @@ fn render_confirm(app: &App, action: &ConfirmAction, frame: &mut Frame) {
 }
 
 fn render_usb_devices(app: &App, frame: &mut Frame) {
+    use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
-    use ratatui::layout::{Layout, Direction, Constraint};
 
     let area = frame.area();
     let dialog_width = 80.min(area.width.saturating_sub(4));
@@ -1557,7 +1754,7 @@ fn render_usb_devices(app: &App, frame: &mut Frame) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -1566,9 +1763,9 @@ fn render_usb_devices(app: &App, frame: &mut Frame) {
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(2),  // Left margin
-            Constraint::Min(1),     // Content
-            Constraint::Length(2),  // Right margin
+            Constraint::Length(2), // Left margin
+            Constraint::Min(1),    // Content
+            Constraint::Length(2), // Right margin
         ])
         .split(inner);
 
@@ -1576,9 +1773,9 @@ fn render_usb_devices(app: &App, frame: &mut Frame) {
     let v_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // Top padding
-            Constraint::Min(4),     // Device list
-            Constraint::Length(2),  // Help text
+            Constraint::Length(1), // Top padding
+            Constraint::Min(4),    // Device list
+            Constraint::Length(2), // Help text
         ])
         .split(h_chunks[1]);
 
@@ -1586,19 +1783,23 @@ fn render_usb_devices(app: &App, frame: &mut Frame) {
     let help_area = v_chunks[2];
 
     if app.usb_devices.is_empty() {
-        let msg = Paragraph::new("No USB devices found.\n\nConnect a USB device and reopen this screen.")
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center);
+        let msg =
+            Paragraph::new("No USB devices found.\n\nConnect a USB device and reopen this screen.")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center);
         frame.render_widget(msg, content_area);
     } else {
-        let items: Vec<ListItem> = app.usb_devices
+        let items: Vec<ListItem> = app
+            .usb_devices
             .iter()
             .enumerate()
             .map(|(i, device)| {
                 let selected = app.selected_usb_devices.contains(&i);
                 let checkbox = if selected { "[✓]" } else { "[ ]" };
                 let style = if i == app.selected_menu_item {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
                 } else if selected {
                     Style::default().fg(Color::Green)
                 } else {
@@ -1619,8 +1820,7 @@ fn render_usb_devices(app: &App, frame: &mut Frame) {
         let mut state = ListState::default();
         state.select(Some(app.selected_menu_item));
 
-        let list = List::new(items)
-            .highlight_symbol("> ");
+        let list = List::new(items).highlight_symbol("> ");
         frame.render_stateful_widget(list, content_area, &mut state);
     }
 
@@ -1645,20 +1845,20 @@ fn render_search(app: &App, frame: &mut Frame) {
         .title(" Search ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
 
-    let input = Paragraph::new(format!("/{}", app.search_query))
-        .style(Style::default().fg(Color::White));
+    let input =
+        Paragraph::new(format!("/{}", app.search_query)).style(Style::default().fg(Color::White));
     frame.render_widget(input, inner);
 }
 
 fn render_file_browser(app: &App, frame: &mut Frame) {
-    use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
-    use ratatui::layout::{Layout, Direction, Constraint};
     use crate::app::FileBrowserMode;
+    use ratatui::layout::{Constraint, Direction, Layout};
+    use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
 
     let area = frame.area();
     let dialog_width = 60.min(area.width.saturating_sub(4));
@@ -1681,7 +1881,7 @@ fn render_file_browser(app: &App, frame: &mut Frame) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -1690,9 +1890,9 @@ fn render_file_browser(app: &App, frame: &mut Frame) {
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(2),  // Left margin
-            Constraint::Min(1),     // Content
-            Constraint::Length(2),  // Right margin
+            Constraint::Length(2), // Left margin
+            Constraint::Min(1),    // Content
+            Constraint::Length(2), // Right margin
         ])
         .split(inner);
 
@@ -1700,8 +1900,8 @@ fn render_file_browser(app: &App, frame: &mut Frame) {
     let v_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // Top padding
-            Constraint::Min(1),     // Content
+            Constraint::Length(1), // Top padding
+            Constraint::Min(1),    // Content
         ])
         .split(h_chunks[1]);
 
@@ -1710,12 +1910,20 @@ fn render_file_browser(app: &App, frame: &mut Frame) {
     if app.file_browser_entries.is_empty() {
         let msg_text = match app.file_browser_mode {
             FileBrowserMode::Iso => "No ISO files found in this directory.",
-            FileBrowserMode::RecoveryImage => "No recovery images (.dmg, .qcow2) found in this directory.",
+            FileBrowserMode::RecoveryImage => {
+                "No recovery images (.dmg, .qcow2) found in this directory."
+            }
             FileBrowserMode::Disk => "No disk images found in this directory.",
             FileBrowserMode::Directory => "No subdirectories in this directory.",
-            FileBrowserMode::ImportConfig => "No config files (.xml, .conf) found in this directory.",
-            FileBrowserMode::Bios => "No firmware files (.bin, .rom, .qcow2, .fd) found in this directory.",
-            FileBrowserMode::Floppy => "No floppy images (.img, .ima, .flp, .vfd) found in this directory.",
+            FileBrowserMode::ImportConfig => {
+                "No config files (.xml, .conf) found in this directory."
+            }
+            FileBrowserMode::Bios => {
+                "No firmware files (.bin, .rom, .qcow2, .fd) found in this directory."
+            }
+            FileBrowserMode::Floppy => {
+                "No floppy images (.img, .ima, .flp, .vfd) found in this directory."
+            }
         };
         let msg = ratatui::widgets::Paragraph::new(msg_text)
             .style(Style::default().fg(Color::DarkGray))
@@ -1724,7 +1932,8 @@ fn render_file_browser(app: &App, frame: &mut Frame) {
         return;
     }
 
-    let items: Vec<ListItem> = app.file_browser_entries
+    let items: Vec<ListItem> = app
+        .file_browser_entries
         .iter()
         .map(|entry| {
             let prefix = if entry.name == "[Select This Directory]" {
@@ -1769,6 +1978,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                             if let Some(ref mut state) = app.wizard_state {
                                 state.iso_path = Some(selected_path);
                                 state.is_recovery_image = false;
+                                state.sync_auto_launch_default();
                             }
                             app.pop_screen(); // Close file browser
 
@@ -1787,6 +1997,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                             if let Some(ref mut state) = app.wizard_state {
                                 state.iso_path = Some(selected_path);
                                 state.is_recovery_image = true;
+                                state.sync_auto_launch_default();
                             }
                             app.pop_screen();
                             let _ = app.wizard_next_step();
@@ -1802,6 +2013,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                         // Selected a disk file - must be in wizard mode
                         if let Some(ref mut state) = app.wizard_state {
                             state.existing_disk_path = Some(selected_path);
+                            state.sync_auto_launch_default();
                         }
                         app.pop_screen(); // Close file browser, return to disk config step
                     }
@@ -1817,6 +2029,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                         if app.wizard_state.is_some() {
                             if let Some(ref mut state) = app.wizard_state {
                                 state.floppy_path = Some(selected_path);
+                                state.sync_auto_launch_default();
                             }
                             app.pop_screen(); // Close file browser, return to ISO step (don't advance)
                         } else {
@@ -1844,7 +2057,9 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                                     state.folder_name =
                                         crate::app::CreateWizardState::find_available_folder_name(
                                             &library_path,
-                                            &crate::app::CreateWizardState::generate_folder_name(&vm.name),
+                                            &crate::app::CreateWizardState::generate_folder_name(
+                                                &vm.name,
+                                            ),
                                         );
                                     let has_notes = !vm.import_notes.is_empty();
                                     state.selected_vm = Some(vm);
@@ -1865,7 +2080,9 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                                     let folder_name =
                                         crate::app::CreateWizardState::find_available_folder_name(
                                             &library_path,
-                                            &crate::app::CreateWizardState::generate_folder_name(&vm.name),
+                                            &crate::app::CreateWizardState::generate_folder_name(
+                                                &vm.name,
+                                            ),
                                         );
                                     let vm_name = vm.name.clone();
                                     let (step, warnings_acknowledged) = if has_notes {
@@ -1922,7 +2139,7 @@ fn render_text_input(app: &App, context: &TextInputContext, frame: &mut Frame) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -1997,7 +2214,13 @@ fn handle_text_input(app: &mut App, context: TextInputContext, key: KeyEvent) ->
                 }
                 TextInputContext::RenameVm => {
                     // Allow more characters for VM display names
-                    c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == ' ' || c == '(' || c == ')'
+                    c.is_alphanumeric()
+                        || c == '-'
+                        || c == '_'
+                        || c == '.'
+                        || c == ' '
+                        || c == '('
+                        || c == ')'
                 }
             };
             if allowed {
@@ -2025,7 +2248,7 @@ fn render_error_dialog(app: &App, frame: &mut Frame) {
         .title_bottom(" [↑/↓ or j/k] Scroll  [Enter/Esc] Close ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);

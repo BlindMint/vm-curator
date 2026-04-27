@@ -35,18 +35,40 @@ pub enum MenuAction {
     EditRawConfig,
 }
 
+fn is_danger_action(action: MenuAction) -> bool {
+    matches!(
+        action,
+        MenuAction::StopVm | MenuAction::ResetVm | MenuAction::DeleteVm
+    )
+}
+
 /// Get menu items based on config and VM state
 pub fn get_menu_items(vm: &DiscoveredVm, config: &Config) -> Vec<MenuItem> {
     let mut items = vec![
         MenuItem {
             name: "Boot Options",
-            description: "Normal, install, or custom ISO boot",
+            description: "Normal, installer, recovery, or custom media boot",
             action: MenuAction::BootOptions,
         },
         MenuItem {
+            name: "Change Display",
+            description: "Switch GTK, SDL, SPICE-app, or VNC output",
+            action: MenuAction::ChangeDisplay,
+        },
+        MenuItem {
+            name: "Network Settings",
+            description: "Change backend, adapter model, and port forwarding",
+            action: MenuAction::NetworkSettings,
+        },
+        MenuItem {
             name: "Snapshots",
-            description: "Create, restore, or delete snapshots",
+            description: "Create, restore, or delete qcow2 snapshots",
             action: MenuAction::Snapshots,
+        },
+        MenuItem {
+            name: "Shared Folders",
+            description: "Share host directories with the VM",
+            action: MenuAction::SharedFolders,
         },
         MenuItem {
             name: "USB Passthrough",
@@ -57,16 +79,6 @@ pub fn get_menu_items(vm: &DiscoveredVm, config: &Config) -> Vec<MenuItem> {
             name: "PCI Passthrough",
             description: "Pass PCI devices to the VM",
             action: MenuAction::PciPassthrough,
-        },
-        MenuItem {
-            name: "Shared Folders",
-            description: "Share host directories with the VM (9p)",
-            action: MenuAction::SharedFolders,
-        },
-        MenuItem {
-            name: "Network Settings",
-            description: "Configure networking backend and port forwarding",
-            action: MenuAction::NetworkSettings,
         },
     ];
 
@@ -89,11 +101,6 @@ pub fn get_menu_items(vm: &DiscoveredVm, config: &Config) -> Vec<MenuItem> {
     }
 
     items.extend([
-        MenuItem {
-            name: "Change Display",
-            description: "GTK, SDL, SPICE-app, or VNC output",
-            action: MenuAction::ChangeDisplay,
-        },
         MenuItem {
             name: "Edit Notes",
             description: "Add or edit personal notes for this VM",
@@ -126,7 +133,7 @@ pub fn get_menu_items(vm: &DiscoveredVm, config: &Config) -> Vec<MenuItem> {
         },
         MenuItem {
             name: "Edit Raw Configuration",
-            description: "Edit the launch.sh script directly",
+            description: "Edit launch.sh directly",
             action: MenuAction::EditRawConfig,
         },
     ]);
@@ -136,6 +143,69 @@ pub fn get_menu_items(vm: &DiscoveredVm, config: &Config) -> Vec<MenuItem> {
     // Future: Add "Launch with GPU Passthrough" or "Remove GPU Passthrough" based on this
 
     items
+}
+
+fn section_title_for(item: &MenuItem) -> &'static str {
+    match item.action {
+        MenuAction::BootOptions | MenuAction::ChangeDisplay | MenuAction::NetworkSettings => "Run",
+        MenuAction::Snapshots => "Storage",
+        MenuAction::SharedFolders
+        | MenuAction::UsbPassthrough
+        | MenuAction::PciPassthrough
+        | MenuAction::MultiGpuPassthrough
+        | MenuAction::SingleGpuPassthrough => "Devices",
+        MenuAction::EditNotes | MenuAction::RenameVm => "Metadata",
+        MenuAction::EditRawConfig => "Advanced",
+        MenuAction::StopVm | MenuAction::ResetVm | MenuAction::DeleteVm => "Danger",
+    }
+}
+
+fn management_status_line(app: &App, vm: &DiscoveredVm) -> Line<'static> {
+    let run_text = if let Some(pid) = app.running_vms.get(&vm.id) {
+        format!("running (pid {})", pid)
+    } else {
+        "stopped".to_string()
+    };
+    let snapshot_text = if vm.config.supports_snapshots() {
+        "snapshots: qcow2"
+    } else {
+        "snapshots: unavailable"
+    };
+    let network_text = vm
+        .config
+        .network
+        .as_ref()
+        .map(|network| format!("net: {}", network.backend))
+        .unwrap_or_else(|| "net: none".to_string());
+
+    Line::from(vec![
+        Span::styled(
+            " STATUS ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::raw(format!(" {}  ", run_text)),
+        Span::styled(
+            " STORAGE ",
+            Style::default().fg(Color::Black).bg(Color::Green),
+        ),
+        Span::raw(format!(" {}  ", snapshot_text)),
+        Span::styled(
+            " NETWORK ",
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ),
+        Span::raw(network_text),
+    ])
+}
+
+pub fn menu_index_for_action(app: &App, action: MenuAction) -> usize {
+    app.selected_vm()
+        .map(|vm| {
+            get_menu_items(vm, &app.config)
+                .iter()
+                .position(|item| item.action == action)
+                .unwrap_or(0)
+        })
+        .unwrap_or(0)
 }
 
 /// Get the count of menu items (for navigation bounds)
@@ -160,20 +230,25 @@ const DISPLAY_OPTIONS: &[(&str, &str)] = &[
 /// Falls back to DISPLAY_OPTIONS if detection is not available.
 pub fn get_display_options(app: &App) -> Vec<(String, String)> {
     // Get the emulator for the currently selected VM
-    let emulator = app.selected_vm()
+    let emulator = app
+        .selected_vm()
         .map(|vm| vm.config.emulator.command())
         .unwrap_or("qemu-system-x86_64");
 
     let detected = app.get_display_options_for_emulator(emulator);
 
     // Map detected backends to (name, description) pairs using DISPLAY_OPTIONS for descriptions
-    detected.iter().map(|backend| {
-        let desc = DISPLAY_OPTIONS.iter()
-            .find(|(name, _)| *name == backend.as_str())
-            .map(|(_, desc)| desc.to_string())
-            .unwrap_or_else(|| format!("{} display", backend));
-        (backend.clone(), desc)
-    }).collect()
+    detected
+        .iter()
+        .map(|backend| {
+            let desc = DISPLAY_OPTIONS
+                .iter()
+                .find(|(name, _)| *name == backend.as_str())
+                .map(|(_, desc)| desc.to_string())
+                .unwrap_or_else(|| format!("{} display", backend));
+            (backend.clone(), desc)
+        })
+        .collect()
 }
 
 /// Render the management menu
@@ -190,14 +265,26 @@ pub fn render(app: &App, frame: &mut Frame) {
     // Calculate dialog size - adjust height based on item count
     let dialog_width = 50.min(area.width.saturating_sub(4));
     let item_count = menu_items.len();
-    let dialog_height = (6 + item_count * 2).min(area.height.saturating_sub(4) as usize) as u16;
+    let section_count = menu_items
+        .iter()
+        .enumerate()
+        .filter(|(idx, item)| {
+            idx.checked_sub(1)
+                .and_then(|prev| menu_items.get(prev))
+                .map(section_title_for)
+                != Some(section_title_for(item))
+        })
+        .count();
+    let dialog_height =
+        (6 + item_count * 2 + section_count).min(area.height.saturating_sub(4) as usize) as u16;
 
     let dialog_area = centered_rect(dialog_width, dialog_height, area);
 
     // Clear the background
     frame.render_widget(Clear, dialog_area);
 
-    let vm_name = app.selected_vm()
+    let vm_name = app
+        .selected_vm()
         .map(|vm| vm.display_name())
         .unwrap_or_else(|| "Unknown".to_string());
 
@@ -205,7 +292,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         .title(format!(" {} - Management ", vm_name))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -214,58 +301,119 @@ pub fn render(app: &App, frame: &mut Frame) {
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(2),  // Left margin
-            Constraint::Min(1),     // Content
-            Constraint::Length(2),  // Right margin
+            Constraint::Length(2), // Left margin
+            Constraint::Min(1),    // Content
+            Constraint::Length(2), // Right margin
         ])
         .split(inner);
 
-    // Split content into padding, menu, and help
+    // Split content into padding, status, menu, and help
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // Top padding
-            Constraint::Min(4),     // Menu items
-            Constraint::Length(2),  // Help text
+            Constraint::Length(1), // Top padding
+            Constraint::Length(3), // Status
+            Constraint::Min(4),    // Menu items
+            Constraint::Length(2), // Help text
         ])
         .split(h_chunks[1]);
+
+    if let Some(vm) = app.selected_vm() {
+        let status = Paragraph::new(vec![management_status_line(app, vm)])
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(" VM Status "),
+            )
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        frame.render_widget(status, chunks[1]);
+    }
 
     // Create menu items with descriptions
     let items: Vec<ListItem> = menu_items
         .iter()
         .enumerate()
-        .map(|(i, item)| {
+        .flat_map(|(i, item)| {
             let style = if i == app.selected_menu_item {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_danger_action(item.action) {
+                Style::default().fg(Color::LightRed)
             } else {
                 Style::default().fg(Color::White)
             };
+
+            let mut rows = Vec::new();
+            let current_section = section_title_for(item);
+            let previous_section = i
+                .checked_sub(1)
+                .and_then(|idx| menu_items.get(idx))
+                .map(section_title_for);
+            if previous_section != Some(current_section) {
+                if previous_section.is_some() {
+                    rows.push(ListItem::new(Line::from("")));
+                }
+                rows.push(ListItem::new(Line::styled(
+                    format!(" {} ", current_section),
+                    if current_section == "Danger" {
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    },
+                )));
+            }
 
             let content = vec![
                 Line::styled(format!("[{}] {}", i + 1, item.name), style),
                 Line::styled(
                     format!("    {}", item.description),
-                    Style::default().fg(Color::DarkGray),
+                    if is_danger_action(item.action) {
+                        Style::default().fg(Color::LightRed)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    },
                 ),
             ];
 
-            ListItem::new(content)
+            rows.push(ListItem::new(content));
+            rows
         })
         .collect();
 
     let mut state = ListState::default();
-    state.select(Some(app.selected_menu_item));
+    let selected_visual_index = menu_items
+        .iter()
+        .enumerate()
+        .take(app.selected_menu_item + 1)
+        .fold(0usize, |acc, (i, item)| {
+            let previous_section = i
+                .checked_sub(1)
+                .and_then(|idx| menu_items.get(idx))
+                .map(section_title_for);
+            let needs_header = previous_section != Some(section_title_for(item));
+            let spacer_rows = if needs_header && previous_section.is_some() {
+                1
+            } else {
+                0
+            };
+            acc + if needs_header { 2 + spacer_rows } else { 1 }
+        })
+        .saturating_sub(1);
+    state.select(Some(selected_visual_index));
 
-    let list = List::new(items)
-        .highlight_symbol("> ");
+    let list = List::new(items).highlight_symbol("> ");
 
-    frame.render_stateful_widget(list, chunks[1], &mut state);
+    frame.render_stateful_widget(list, chunks[2], &mut state);
 
     // Help text
-    let help = Paragraph::new("[Enter] Select  [Esc] Back")
-        .style(Style::default().fg(Color::DarkGray))
+    let help = Paragraph::new("[Enter/1-9] Select  [j/k] Navigate  [Esc] Back")
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[2]);
+    frame.render_widget(help, chunks[3]);
 }
 
 /// Render boot options submenu
@@ -281,7 +429,7 @@ pub fn render_boot_options(app: &App, frame: &mut Frame) {
         .title(" Boot Options ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -290,9 +438,9 @@ pub fn render_boot_options(app: &App, frame: &mut Frame) {
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(2),  // Left margin
-            Constraint::Min(1),     // Content
-            Constraint::Length(2),  // Right margin
+            Constraint::Length(2), // Left margin
+            Constraint::Min(1),    // Content
+            Constraint::Length(2), // Right margin
         ])
         .split(inner);
 
@@ -300,8 +448,8 @@ pub fn render_boot_options(app: &App, frame: &mut Frame) {
     let v_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // Top padding
-            Constraint::Min(1),     // Content
+            Constraint::Length(1), // Top padding
+            Constraint::Min(1),    // Content
         ])
         .split(h_chunks[1]);
 
@@ -309,8 +457,14 @@ pub fn render_boot_options(app: &App, frame: &mut Frame) {
         ("Normal boot", "Start the VM normally"),
         ("Install mode", "Boot from installation media"),
         ("Boot with custom ISO", "Select an ISO file to boot"),
-        ("Boot with recovery DMG", "Select a DMG file as recovery image"),
-        ("Boot with floppy image", "Select a floppy image (.img, .ima) to boot"),
+        (
+            "Boot with recovery DMG",
+            "Select a DMG file as recovery image",
+        ),
+        (
+            "Boot with floppy image",
+            "Select a floppy image (.img, .ima) to boot",
+        ),
     ];
 
     let items: Vec<ListItem> = boot_items
@@ -318,14 +472,19 @@ pub fn render_boot_options(app: &App, frame: &mut Frame) {
         .enumerate()
         .map(|(i, (name, desc))| {
             let style = if i == app.selected_menu_item {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
 
             ListItem::new(vec![
                 Line::styled(format!("[{}] {}", i + 1, name), style),
-                Line::styled(format!("    {}", desc), Style::default().fg(Color::DarkGray)),
+                Line::styled(
+                    format!("    {}", desc),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ])
         })
         .collect();
@@ -347,7 +506,8 @@ pub fn render_display_options(app: &App, frame: &mut Frame) {
     frame.render_widget(Clear, dialog_area);
 
     // Get current display setting from VM
-    let current_display = app.selected_vm()
+    let current_display = app
+        .selected_vm()
         .map(|vm| extract_display_from_script(&vm.config.raw_script))
         .unwrap_or_else(|| "gtk".to_string());
 
@@ -355,7 +515,7 @@ pub fn render_display_options(app: &App, frame: &mut Frame) {
         .title(format!(" Display Options (current: {}) ", current_display))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -364,9 +524,9 @@ pub fn render_display_options(app: &App, frame: &mut Frame) {
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(2),  // Left margin
-            Constraint::Min(1),     // Content
-            Constraint::Length(2),  // Right margin
+            Constraint::Length(2), // Left margin
+            Constraint::Min(1),    // Content
+            Constraint::Length(2), // Right margin
         ])
         .split(inner);
 
@@ -374,9 +534,9 @@ pub fn render_display_options(app: &App, frame: &mut Frame) {
     let v_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // Top padding
-            Constraint::Min(1),     // Content
-            Constraint::Length(2),  // Help
+            Constraint::Length(1), // Top padding
+            Constraint::Min(1),    // Content
+            Constraint::Length(2), // Help
         ])
         .split(h_chunks[1]);
 
@@ -388,7 +548,9 @@ pub fn render_display_options(app: &App, frame: &mut Frame) {
         .map(|(i, (name, desc))| {
             let is_current = *name == current_display;
             let style = if i == app.selected_menu_item {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else if is_current {
                 Style::default().fg(Color::Green)
             } else {
@@ -399,7 +561,10 @@ pub fn render_display_options(app: &App, frame: &mut Frame) {
 
             ListItem::new(vec![
                 Line::styled(format!("[{}] {}{}", i + 1, name, marker), style),
-                Line::styled(format!("    {}", desc), Style::default().fg(Color::DarkGray)),
+                Line::styled(
+                    format!("    {}", desc),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ])
         })
         .collect();
@@ -423,7 +588,8 @@ fn extract_display_from_script(script: &str) -> String {
     if let Some(pos) = script.find("-display ") {
         let rest = &script[pos + 9..];
         // Find the display value (ends at space, comma, or backslash)
-        let end = rest.find(|c: char| c.is_whitespace() || c == ',' || c == '\\')
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == ',' || c == '\\')
             .unwrap_or(rest.len());
         let display = rest[..end].trim();
         // Handle gl=on suffix
@@ -446,7 +612,8 @@ pub fn render_snapshots(app: &App, frame: &mut Frame) {
     let dialog_area = centered_rect(dialog_width, dialog_height, area);
     frame.render_widget(Clear, dialog_area);
 
-    let supports_snapshots = app.selected_vm()
+    let supports_snapshots = app
+        .selected_vm()
         .map(|vm| vm.config.supports_snapshots())
         .unwrap_or(false);
 
@@ -460,7 +627,7 @@ pub fn render_snapshots(app: &App, frame: &mut Frame) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -469,9 +636,9 @@ pub fn render_snapshots(app: &App, frame: &mut Frame) {
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(2),  // Left margin
-            Constraint::Min(1),     // Content
-            Constraint::Length(2),  // Right margin
+            Constraint::Length(2), // Left margin
+            Constraint::Min(1),    // Content
+            Constraint::Length(2), // Right margin
         ])
         .split(inner);
 
@@ -479,8 +646,8 @@ pub fn render_snapshots(app: &App, frame: &mut Frame) {
     let v_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // Top padding
-            Constraint::Min(1),     // Content
+            Constraint::Length(1), // Top padding
+            Constraint::Min(1),    // Content
         ])
         .split(h_chunks[1]);
 
@@ -496,16 +663,18 @@ pub fn render_snapshots(app: &App, frame: &mut Frame) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(4), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(4),
+            Constraint::Length(2),
+        ])
         .split(content_area);
 
     // Action buttons
-    let actions = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled("[c]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Create new snapshot"),
-        ]),
-    ]);
+    let actions = Paragraph::new(vec![Line::from(vec![
+        Span::styled("[c]", Style::default().fg(Color::Yellow)),
+        Span::raw(" Create new snapshot"),
+    ])]);
     frame.render_widget(actions, chunks[0]);
 
     // Snapshot list
@@ -515,12 +684,15 @@ pub fn render_snapshots(app: &App, frame: &mut Frame) {
             .alignment(Alignment::Center);
         frame.render_widget(msg, chunks[1]);
     } else {
-        let items: Vec<ListItem> = app.snapshots
+        let items: Vec<ListItem> = app
+            .snapshots
             .iter()
             .enumerate()
             .map(|(i, snap)| {
                 let style = if i == app.selected_snapshot {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
@@ -538,8 +710,7 @@ pub fn render_snapshots(app: &App, frame: &mut Frame) {
         let mut state = ListState::default();
         state.select(Some(app.selected_snapshot));
 
-        let list = List::new(items)
-            .highlight_symbol("> ");
+        let list = List::new(items).highlight_symbol("> ");
         frame.render_stateful_widget(list, chunks[1], &mut state);
     }
 
@@ -554,4 +725,48 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     Rect::new(x, y, width, height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn danger_actions_are_classified_correctly() {
+        assert!(is_danger_action(MenuAction::StopVm));
+        assert!(is_danger_action(MenuAction::ResetVm));
+        assert!(is_danger_action(MenuAction::DeleteVm));
+        assert!(!is_danger_action(MenuAction::BootOptions));
+        assert!(!is_danger_action(MenuAction::EditRawConfig));
+    }
+
+    #[test]
+    fn section_order_keeps_danger_actions_last() {
+        let vm = DiscoveredVm {
+            id: "linux-test".to_string(),
+            path: "/tmp/linux-test".into(),
+            launch_script: "/tmp/linux-test/launch.sh".into(),
+            config: crate::vm::QemuConfig::default(),
+            custom_name: None,
+            os_profile: None,
+            notes: None,
+        };
+        let config = Config::default();
+        let items = get_menu_items(&vm, &config);
+
+        let danger_index = items
+            .iter()
+            .position(|item| item.action == MenuAction::StopVm)
+            .unwrap();
+        let advanced_index = items
+            .iter()
+            .position(|item| item.action == MenuAction::EditRawConfig)
+            .unwrap();
+
+        assert!(danger_index < advanced_index);
+        assert!(items
+            .iter()
+            .skip(danger_index)
+            .any(|item| item.action == MenuAction::DeleteVm));
+    }
 }

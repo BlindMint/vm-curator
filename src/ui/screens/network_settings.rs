@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use crate::app::{AddPfStep, AddingPortForward, App, NetworkSettingsState};
+use crate::commands::qemu_system::{classify_bridge, is_lab_friendly_bridge, lab_friendly_bridges};
 use crate::vm::qemu_config::{PortForward, PortProtocol};
 
 /// Network adapter model options (same as create wizard)
@@ -32,7 +33,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         .title(" Network Settings ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -49,25 +50,33 @@ pub fn render(app: &App, frame: &mut Frame) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1),   // Header
-            Constraint::Length(1),   // Spacer
-            Constraint::Length(1),   // Adapter field
-            Constraint::Length(1),   // Backend field
-            Constraint::Length(1),   // Bridge name / Port forwards field
-            Constraint::Length(1),   // Spacer
-            Constraint::Min(6),      // Info area (port forward list or bridge status)
-            Constraint::Length(2),   // Help
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Adapter field
+            Constraint::Length(1), // Backend field
+            Constraint::Length(1), // Bridge name / Port forwards field
+            Constraint::Length(1), // Spacer
+            Constraint::Min(6),    // Info area (port forward list or bridge status)
+            Constraint::Length(2), // Help
         ])
         .split(inner);
 
     // Header
-    let header = Paragraph::new("Configure VM Networking")
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    let header = Paragraph::new("Configure VM Networking").style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
     frame.render_widget(header, chunks[0]);
 
     // Adapter model
     let adapter_selected = ns.selected_field == 0;
-    let adapter_line = render_field_line("Adapter:", &ns.model, adapter_selected, "[Left/Right] cycle");
+    let adapter_line = render_field_line(
+        "Adapter:",
+        &ns.model,
+        adapter_selected,
+        "[Left/Right] cycle",
+    );
     frame.render_widget(Paragraph::new(adapter_line), chunks[2]);
 
     // Backend
@@ -75,11 +84,19 @@ pub fn render(app: &App, frame: &mut Frame) {
     let backend_display = match ns.backend.as_str() {
         "user" => "user/SLIRP (NAT)".to_string(),
         "passt" => "passt".to_string(),
-        "bridge" => format!("bridge ({})", ns.bridge_name.as_deref().unwrap_or("qemubr0")),
+        "bridge" => format!(
+            "bridge ({})",
+            ns.bridge_name.as_deref().unwrap_or("qemubr0")
+        ),
         "none" => "none".to_string(),
         other => other.to_string(),
     };
-    let backend_line = render_field_line("Backend:", &backend_display, backend_selected, "[Left/Right] cycle");
+    let backend_line = render_field_line(
+        "Backend:",
+        &backend_display,
+        backend_selected,
+        "[Left/Right] cycle",
+    );
     frame.render_widget(Paragraph::new(backend_line), chunks[3]);
 
     // Field 2: Bridge name (when bridge backend) or Port forwards (when user/passt)
@@ -87,7 +104,12 @@ pub fn render(app: &App, frame: &mut Frame) {
     if is_bridge {
         let bridge_selected = ns.selected_field == 2;
         let bridge_display = ns.bridge_name.as_deref().unwrap_or("qemubr0");
-        let bridge_line = render_field_line("Bridge:", bridge_display, bridge_selected, "[Left/Right] cycle");
+        let bridge_line = render_field_line(
+            "Bridge:",
+            bridge_display,
+            bridge_selected,
+            "[Left/Right] cycle",
+        );
         frame.render_widget(Paragraph::new(bridge_line), chunks[4]);
     } else if show_pf {
         let pf_selected = ns.selected_field == 2;
@@ -112,7 +134,11 @@ pub fn render(app: &App, frame: &mut Frame) {
             Some(p) => format!("found ({})", p.display()),
             None => "not found".to_string(),
         };
-        let helper_color = if caps.bridge_helper_path.is_some() { Color::Green } else { Color::Red };
+        let helper_color = if caps.bridge_helper_path.is_some() {
+            Color::Green
+        } else {
+            Color::Red
+        };
         lines.push(Line::from(vec![
             Span::styled("  bridge-helper: ", Style::default().fg(Color::Yellow)),
             Span::styled(helper_str, Style::default().fg(helper_color)),
@@ -124,37 +150,113 @@ pub fn render(app: &App, frame: &mut Frame) {
         } else {
             "not configured"
         };
-        let perm_color = if caps.bridge_helper_configured { Color::Green } else { Color::Red };
+        let perm_color = if caps.bridge_helper_configured {
+            Color::Green
+        } else {
+            Color::Red
+        };
         lines.push(Line::from(vec![
             Span::styled("  Permissions:   ", Style::default().fg(Color::Yellow)),
             Span::styled(perm_str, Style::default().fg(perm_color)),
         ]));
 
         // System bridges
-        let bridges_str = if caps.system_bridges.is_empty() {
-            "none found".to_string()
+        let bridges_str = if caps.allowed_bridges.is_empty() {
+            "none allowed".to_string()
         } else {
-            caps.system_bridges.join(", ")
+            caps.allowed_bridges.join(", ")
         };
-        let bridges_color = if caps.system_bridges.is_empty() { Color::Red } else { Color::Green };
+        let bridges_color = if caps.allowed_bridges.is_empty() {
+            Color::Red
+        } else {
+            Color::Green
+        };
         lines.push(Line::from(vec![
-            Span::styled("  Bridges:       ", Style::default().fg(Color::Yellow)),
+            Span::styled("  Allowed:       ", Style::default().fg(Color::Yellow)),
             Span::styled(bridges_str, Style::default().fg(bridges_color)),
         ]));
 
+        if let Some(selected_bridge) = ns.bridge_name.as_deref() {
+            lines.push(Line::from(vec![
+                Span::styled("  Selected:      ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("{} ({})", selected_bridge, classify_bridge(selected_bridge)),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+
+            let (risk_label, risk_color, guidance) = if is_lab_friendly_bridge(selected_bridge) {
+                (
+                    "safer for lab isolation",
+                    Color::Green,
+                    "Likely a private libvirt bridge. Good default for contained VM labs.",
+                )
+            } else {
+                (
+                    "high exposure",
+                    Color::Red,
+                    "Guests on host/LAN bridges can reach the attached network directly. Use only on trusted segments.",
+                )
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled("  Exposure:      ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    risk_label,
+                    Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            lines.push(Line::styled(
+                format!("    {}", guidance),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+
+        let lab_bridges = lab_friendly_bridges(&caps.allowed_bridges);
+        if !lab_bridges.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("  Lab picks:     ", Style::default().fg(Color::Yellow)),
+                Span::styled(lab_bridges.join(", "), Style::default().fg(Color::Green)),
+            ]));
+        }
+
         // Setup guidance if incomplete
-        if caps.bridge_helper_path.is_none() || !caps.bridge_helper_configured || caps.system_bridges.is_empty() {
+        if caps.bridge_helper_path.is_none()
+            || !caps.bridge_helper_configured
+            || caps.allowed_bridges.is_empty()
+        {
             lines.push(Line::from(""));
-            lines.push(Line::styled("  Setup needed:", Style::default().fg(Color::Yellow)));
+            lines.push(Line::styled(
+                "  Setup needed:",
+                Style::default().fg(Color::Yellow),
+            ));
             if caps.bridge_helper_path.is_none() {
-                lines.push(Line::styled("    Install: qemu-bridge-helper (part of QEMU)", Style::default().fg(Color::DarkGray)));
+                lines.push(Line::styled(
+                    "    Install: qemu-bridge-helper (part of QEMU)",
+                    Style::default().fg(Color::Gray),
+                ));
             }
             if !caps.bridge_helper_configured {
-                lines.push(Line::styled("    Run: sudo setcap cap_net_admin+ep /usr/lib/qemu/qemu-bridge-helper", Style::default().fg(Color::DarkGray)));
+                lines.push(Line::styled(
+                    "    Run: sudo setcap cap_net_admin+ep /usr/lib/qemu/qemu-bridge-helper",
+                    Style::default().fg(Color::Gray),
+                ));
+            }
+            if caps.allowed_bridges.is_empty() {
+                lines.push(Line::styled(
+                    "    Allow a bridge: add 'allow <bridge>' to /etc/qemu/bridge.conf",
+                    Style::default().fg(Color::Gray),
+                ));
             }
             if caps.system_bridges.is_empty() {
-                lines.push(Line::styled("    Create bridge: sudo ip link add qemubr0 type bridge", Style::default().fg(Color::DarkGray)));
-                lines.push(Line::styled("    Enable:        sudo ip link set qemubr0 up", Style::default().fg(Color::DarkGray)));
+                lines.push(Line::styled(
+                    "    Create bridge: sudo ip link add qemubr0 type bridge",
+                    Style::default().fg(Color::Gray),
+                ));
+                lines.push(Line::styled(
+                    "    Enable:        sudo ip link set qemubr0 up",
+                    Style::default().fg(Color::Gray),
+                ));
             }
         }
 
@@ -162,9 +264,15 @@ pub fn render(app: &App, frame: &mut Frame) {
         frame.render_widget(info, chunks[6]);
     } else if show_pf && !ns.port_forwards.is_empty() {
         let mut lines = Vec::new();
-        lines.push(Line::styled("  Current port forwarding rules:", Style::default().fg(Color::DarkGray)));
+        lines.push(Line::styled(
+            "  Current port forwarding rules:",
+            Style::default().fg(Color::Gray),
+        ));
         for pf in &ns.port_forwards {
-            lines.push(Line::from(format!("    {} {} -> {}", pf.protocol, pf.host_port, pf.guest_port)));
+            lines.push(Line::from(format!(
+                "    {} {} -> {}",
+                pf.protocol, pf.host_port, pf.guest_port
+            )));
         }
         let list = Paragraph::new(lines);
         frame.render_widget(list, chunks[6]);
@@ -172,23 +280,28 @@ pub fn render(app: &App, frame: &mut Frame) {
 
     // Help
     let help = Paragraph::new("[Enter] Apply  [Esc] Cancel  [j/k] Navigate  [Left/Right] Change")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[7]);
 }
 
 /// Render the port forward editor overlay
-fn render_port_forward_editor(_app: &App, ns: &NetworkSettingsState, frame: &mut Frame, area: Rect) {
+fn render_port_forward_editor(
+    _app: &App,
+    ns: &NetworkSettingsState,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1),   // Header
-            Constraint::Length(1),   // Spacer
-            Constraint::Min(8),      // Rules list
-            Constraint::Length(1),   // Spacer
-            Constraint::Length(1),   // Presets
-            Constraint::Length(2),   // Help
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(8),    // Rules list
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Presets
+            Constraint::Length(2), // Help
         ])
         .split(area);
 
@@ -198,14 +311,17 @@ fn render_port_forward_editor(_app: &App, ns: &NetworkSettingsState, frame: &mut
         return;
     }
 
-    let header = Paragraph::new("Port Forwarding Rules")
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    let header = Paragraph::new("Port Forwarding Rules").style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
     frame.render_widget(header, chunks[0]);
 
     // Rules list
     if ns.port_forwards.is_empty() {
         let msg = Paragraph::new("  No port forwarding rules configured.")
-            .style(Style::default().fg(Color::DarkGray));
+            .style(Style::default().fg(Color::Gray));
         frame.render_widget(msg, chunks[2]);
     } else {
         let mut lines = Vec::new();
@@ -213,12 +329,17 @@ fn render_port_forward_editor(_app: &App, ns: &NetworkSettingsState, frame: &mut
             let is_selected = i == ns.pf_selected;
             let prefix = if is_selected { "> " } else { "  " };
             let style = if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
             lines.push(Line::styled(
-                format!("{}{}  {} -> {}", prefix, pf.protocol, pf.host_port, pf.guest_port),
+                format!(
+                    "{}{}  {} -> {}",
+                    prefix, pf.protocol, pf.host_port, pf.guest_port
+                ),
                 style,
             ));
         }
@@ -228,12 +349,12 @@ fn render_port_forward_editor(_app: &App, ns: &NetworkSettingsState, frame: &mut
 
     // Presets
     let presets = Paragraph::new("  Presets: [1] SSH  [2] RDP  [3] HTTP  [4] HTTPS  [5] VNC")
-        .style(Style::default().fg(Color::DarkGray));
+        .style(Style::default().fg(Color::Gray));
     frame.render_widget(presets, chunks[4]);
 
     // Help
     let help = Paragraph::new("[a] Add  [d] Delete  [1-5] Preset  [Esc] Done")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[5]);
 }
@@ -244,28 +365,37 @@ fn render_adding_pf(adding: &AddingPortForward, frame: &mut Frame, area: Rect) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1),   // Header
-            Constraint::Length(1),   // Spacer
-            Constraint::Length(1),   // Protocol
-            Constraint::Length(1),   // Host port
-            Constraint::Length(1),   // Guest port
-            Constraint::Min(3),      // Spacer
-            Constraint::Length(2),   // Help
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Protocol
+            Constraint::Length(1), // Host port
+            Constraint::Length(1), // Guest port
+            Constraint::Min(3),    // Spacer
+            Constraint::Length(2), // Help
         ])
         .split(area);
 
-    let header = Paragraph::new("Add Port Forward Rule")
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    let header = Paragraph::new("Add Port Forward Rule").style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
     frame.render_widget(header, chunks[0]);
 
     // Protocol
     let proto_active = adding.step == AddPfStep::Protocol;
     let proto_style = if proto_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
-    let proto_hint = if proto_active { " [Left/Right] toggle" } else { "" };
+    let proto_hint = if proto_active {
+        " [Left/Right] toggle"
+    } else {
+        ""
+    };
     let proto_line = Line::from(vec![
         Span::styled("  Protocol: ", Style::default().fg(Color::Yellow)),
         Span::styled(format!("{}", adding.protocol), proto_style),
@@ -276,14 +406,20 @@ fn render_adding_pf(adding: &AddingPortForward, frame: &mut Frame, area: Rect) {
     // Host port
     let host_active = adding.step == AddPfStep::HostPort;
     let host_style = if host_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
     let host_line = Line::from(vec![
         Span::styled("  Host Port: ", Style::default().fg(Color::Yellow)),
         Span::styled(
-            if adding.host_port_input.is_empty() { "_" } else { &adding.host_port_input },
+            if adding.host_port_input.is_empty() {
+                "_"
+            } else {
+                &adding.host_port_input
+            },
             host_style,
         ),
     ]);
@@ -292,14 +428,20 @@ fn render_adding_pf(adding: &AddingPortForward, frame: &mut Frame, area: Rect) {
     // Guest port
     let guest_active = adding.step == AddPfStep::GuestPort;
     let guest_style = if guest_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
     let guest_line = Line::from(vec![
         Span::styled("  Guest Port: ", Style::default().fg(Color::Yellow)),
         Span::styled(
-            if adding.guest_port_input.is_empty() { "_" } else { &adding.guest_port_input },
+            if adding.guest_port_input.is_empty() {
+                "_"
+            } else {
+                &adding.guest_port_input
+            },
             guest_style,
         ),
     ]);
@@ -314,16 +456,32 @@ fn render_adding_pf(adding: &AddingPortForward, frame: &mut Frame, area: Rect) {
 fn render_field_line<'a>(label: &str, value: &str, selected: bool, hint: &str) -> Line<'a> {
     let prefix = if selected { "> " } else { "  " };
     let value_style = if selected {
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
 
     Line::from(vec![
-        Span::styled(prefix.to_string(), if selected { Style::default().fg(Color::Yellow) } else { Style::default() }),
+        Span::styled(
+            prefix.to_string(),
+            if selected {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            },
+        ),
         Span::styled(format!("{:12}", label), Style::default().fg(Color::Yellow)),
         Span::styled(format!("{:20}", value), value_style),
-        Span::styled(if selected { hint.to_string() } else { String::new() }, Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            if selected {
+                hint.to_string()
+            } else {
+                String::new()
+            },
+            Style::default().fg(Color::DarkGray),
+        ),
     ])
 }
 
@@ -395,11 +553,12 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> anyhow::Res
     }
 
     // Normal settings mode
-    let backend_options: Vec<String> = app.get_network_backend_options()
+    let backend_options: Vec<String> = app
+        .get_network_backend_options()
         .iter()
         .map(|(id, _)| id.to_string())
         .collect();
-    let system_bridges = app.network_caps.system_bridges.clone();
+    let system_bridges = app.network_caps.allowed_bridges.clone();
     let show_pf = {
         let ns = app.network_settings_state.as_ref().unwrap();
         ns.backend == "user" || ns.backend == "passt"
@@ -430,7 +589,11 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> anyhow::Res
             }
         }
         KeyCode::Left | KeyCode::Right => {
-            let delta = if key.code == KeyCode::Right { 1i32 } else { -1i32 };
+            let delta = if key.code == KeyCode::Right {
+                1i32
+            } else {
+                -1i32
+            };
             if let Some(ref mut ns) = app.network_settings_state {
                 match ns.selected_field {
                     0 => {
@@ -439,16 +602,20 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> anyhow::Res
                     }
                     1 => {
                         // Cycle backend
-                        let current_idx = backend_options.iter()
+                        let current_idx = backend_options
+                            .iter()
                             .position(|b| b == &ns.backend)
                             .unwrap_or(0);
                         let new_idx = (current_idx as i32 + delta)
-                            .rem_euclid(backend_options.len() as i32) as usize;
+                            .rem_euclid(backend_options.len() as i32)
+                            as usize;
                         ns.backend = backend_options[new_idx].clone();
 
                         // Set default bridge name
                         if ns.backend == "bridge" && ns.bridge_name.is_none() {
-                            ns.bridge_name = system_bridges.first().cloned()
+                            ns.bridge_name = system_bridges
+                                .first()
+                                .cloned()
                                 .or_else(|| Some("qemubr0".to_string()));
                         }
                     }
@@ -456,11 +623,13 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> anyhow::Res
                         // Cycle bridge name
                         if !system_bridges.is_empty() {
                             let current_bridge = ns.bridge_name.as_deref().unwrap_or("");
-                            let current_idx = system_bridges.iter()
+                            let current_idx = system_bridges
+                                .iter()
                                 .position(|b| b == current_bridge)
                                 .unwrap_or(0);
                             let new_idx = (current_idx as i32 + delta)
-                                .rem_euclid(system_bridges.len() as i32) as usize;
+                                .rem_euclid(system_bridges.len() as i32)
+                                as usize;
                             ns.bridge_name = Some(system_bridges[new_idx].clone());
                         }
                     }
@@ -490,39 +659,41 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> anyhow::Res
 fn handle_adding_pf(app: &mut App, key: crossterm::event::KeyEvent) -> anyhow::Result<()> {
     use crossterm::event::KeyCode;
 
-    let Some(ref mut ns) = app.network_settings_state else { return Ok(()) };
-    let Some(ref mut adding) = ns.adding_pf else { return Ok(()) };
+    let Some(ref mut ns) = app.network_settings_state else {
+        return Ok(());
+    };
+    let Some(ref mut adding) = ns.adding_pf else {
+        return Ok(());
+    };
 
     match key.code {
         KeyCode::Esc => {
             ns.adding_pf = None;
         }
-        KeyCode::Enter => {
-            match adding.step {
-                AddPfStep::Protocol => {
-                    adding.step = AddPfStep::HostPort;
-                }
-                AddPfStep::HostPort => {
-                    if adding.host_port_input.parse::<u16>().is_ok() {
-                        adding.step = AddPfStep::GuestPort;
-                    }
-                }
-                AddPfStep::GuestPort => {
-                    if let (Ok(host), Ok(guest)) = (
-                        adding.host_port_input.parse::<u16>(),
-                        adding.guest_port_input.parse::<u16>(),
-                    ) {
-                        let pf = PortForward {
-                            protocol: adding.protocol,
-                            host_port: host,
-                            guest_port: guest,
-                        };
-                        ns.port_forwards.push(pf);
-                        ns.adding_pf = None;
-                    }
+        KeyCode::Enter => match adding.step {
+            AddPfStep::Protocol => {
+                adding.step = AddPfStep::HostPort;
+            }
+            AddPfStep::HostPort => {
+                if adding.host_port_input.parse::<u16>().is_ok() {
+                    adding.step = AddPfStep::GuestPort;
                 }
             }
-        }
+            AddPfStep::GuestPort => {
+                if let (Ok(host), Ok(guest)) = (
+                    adding.host_port_input.parse::<u16>(),
+                    adding.guest_port_input.parse::<u16>(),
+                ) {
+                    let pf = PortForward {
+                        protocol: adding.protocol,
+                        host_port: host,
+                        guest_port: guest,
+                    };
+                    ns.port_forwards.push(pf);
+                    ns.adding_pf = None;
+                }
+            }
+        },
         KeyCode::Left | KeyCode::Right => {
             if adding.step == AddPfStep::Protocol {
                 adding.protocol = match adding.protocol {
@@ -531,20 +702,20 @@ fn handle_adding_pf(app: &mut App, key: crossterm::event::KeyEvent) -> anyhow::R
                 };
             }
         }
-        KeyCode::Char(c) if c.is_ascii_digit() => {
-            match adding.step {
-                AddPfStep::HostPort => adding.host_port_input.push(c),
-                AddPfStep::GuestPort => adding.guest_port_input.push(c),
-                _ => {}
+        KeyCode::Char(c) if c.is_ascii_digit() => match adding.step {
+            AddPfStep::HostPort => adding.host_port_input.push(c),
+            AddPfStep::GuestPort => adding.guest_port_input.push(c),
+            _ => {}
+        },
+        KeyCode::Backspace => match adding.step {
+            AddPfStep::HostPort => {
+                adding.host_port_input.pop();
             }
-        }
-        KeyCode::Backspace => {
-            match adding.step {
-                AddPfStep::HostPort => { adding.host_port_input.pop(); }
-                AddPfStep::GuestPort => { adding.guest_port_input.pop(); }
-                _ => {}
+            AddPfStep::GuestPort => {
+                adding.guest_port_input.pop();
             }
-        }
+            _ => {}
+        },
         _ => {}
     }
 
@@ -554,14 +725,25 @@ fn handle_adding_pf(app: &mut App, key: crossterm::event::KeyEvent) -> anyhow::R
 fn add_preset(app: &mut App, protocol: PortProtocol, host_port: u16, guest_port: u16) {
     if let Some(ref mut ns) = app.network_settings_state {
         // Don't add duplicate
-        if !ns.port_forwards.iter().any(|pf| pf.host_port == host_port && pf.guest_port == guest_port) {
-            ns.port_forwards.push(PortForward { protocol, host_port, guest_port });
+        if !ns
+            .port_forwards
+            .iter()
+            .any(|pf| pf.host_port == host_port && pf.guest_port == guest_port)
+        {
+            ns.port_forwards.push(PortForward {
+                protocol,
+                host_port,
+                guest_port,
+            });
         }
     }
 }
 
 fn cycle_option(current: &mut String, options: &[&str], delta: i32) {
-    let current_idx = options.iter().position(|&o| o == current.as_str()).unwrap_or(0);
+    let current_idx = options
+        .iter()
+        .position(|&o| o == current.as_str())
+        .unwrap_or(0);
     let new_idx = (current_idx as i32 + delta).rem_euclid(options.len() as i32) as usize;
     *current = options[new_idx].to_string();
 }

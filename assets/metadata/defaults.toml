@@ -1,4 +1,4 @@
-# Default OS metadata for vm-curator
+# Default OS metadata for VM Foundry
 # This file is embedded at compile time but can be overridden at runtime
 #
 # Fields:

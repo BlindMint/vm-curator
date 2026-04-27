@@ -15,6 +15,100 @@ use crate::app::{
 };
 use crate::vm::import;
 
+#[derive(Clone, Copy)]
+enum ImportNoteSeverity {
+    Info,
+    Warning,
+    Risk,
+}
+
+fn import_source_label(source: Option<&ImportSource>) -> &'static str {
+    match source {
+        Some(ImportSource::Libvirt) => "libvirt",
+        Some(ImportSource::Quickemu) => "quickemu",
+        None => "unknown",
+    }
+}
+
+fn import_disk_action_summary(action: ImportDiskAction) -> (&'static str, &'static str, Color) {
+    match action {
+        ImportDiskAction::Symlink => ("symlink", "fast", Color::Yellow),
+        ImportDiskAction::Copy => ("copy", "safe", Color::Green),
+        ImportDiskAction::Move => ("move", "destructive", Color::Red),
+    }
+}
+
+fn import_summary_line(state: &ImportWizardState) -> Line<'static> {
+    let source = import_source_label(state.source.as_ref()).to_string();
+    let selected_vm = state
+        .selected_vm
+        .as_ref()
+        .map(|vm| vm.name.clone())
+        .unwrap_or_else(|| "none".to_string());
+    let detected_os = state
+        .selected_vm
+        .as_ref()
+        .and_then(|vm| vm.detected_os_profile.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let (disk_action, disk_badge, disk_color) = import_disk_action_summary(state.disk_action);
+
+    Line::from(vec![
+        Span::styled(
+            " SOURCE ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::raw(format!(" {}  ", source)),
+        Span::styled(" VM ", Style::default().fg(Color::Black).bg(Color::Blue)),
+        Span::raw(format!(" {}  ", selected_vm)),
+        Span::styled(" DISK ", Style::default().fg(Color::Black).bg(disk_color)),
+        Span::raw(format!(" {} [{}]  ", disk_action, disk_badge)),
+        Span::styled(" OS ", Style::default().fg(Color::Black).bg(Color::Magenta)),
+        Span::raw(format!(" {}", detected_os)),
+    ])
+}
+
+fn render_import_summary(frame: &mut Frame, area: Rect, state: &ImportWizardState) {
+    let summary = Paragraph::new(vec![import_summary_line(state)])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(" Current Selection "),
+        )
+        .style(Style::default().fg(Color::White))
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(summary, area);
+}
+
+fn classify_import_note(note: &str) -> ImportNoteSeverity {
+    let note = note.to_lowercase();
+    if note.contains("not readable")
+        || note.contains("does not exist")
+        || note.contains("directly exposed")
+        || note.contains("source vm will no longer have access")
+    {
+        ImportNoteSeverity::Risk
+    } else if note.contains("changed to")
+        || note.contains("requires")
+        || note.contains("macvtap")
+        || note.contains("libvirt virtual network")
+        || note.contains("private/libvirt bridge")
+    {
+        ImportNoteSeverity::Warning
+    } else {
+        ImportNoteSeverity::Info
+    }
+}
+
+fn severity_style(severity: ImportNoteSeverity) -> (Color, &'static str) {
+    match severity {
+        ImportNoteSeverity::Info => (Color::Cyan, "INFO"),
+        ImportNoteSeverity::Warning => (Color::Yellow, "WARN"),
+        ImportNoteSeverity::Risk => (Color::Red, "RISK"),
+    }
+}
+
 // =========================================================================
 // Rendering
 // =========================================================================
@@ -48,7 +142,7 @@ fn render_step_select_source(state: &ImportWizardState, frame: &mut Frame, area:
         .title(" Import VM - Select Source ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -59,7 +153,7 @@ fn render_step_select_source(state: &ImportWizardState, frame: &mut Frame, area:
         .constraints([
             Constraint::Length(2), // Description
             Constraint::Length(1), // Spacer
-            Constraint::Min(8),   // Options
+            Constraint::Min(8),    // Options
             Constraint::Length(2), // Help
         ])
         .split(inner);
@@ -69,9 +163,18 @@ fn render_step_select_source(state: &ImportWizardState, frame: &mut Frame, area:
     frame.render_widget(desc, chunks[0]);
 
     let options: &[(&str, &str)] = &[
-        ("libvirt (XML)", "Import from libvirt/virt-manager domain XML"),
-        ("quickemu (.conf)", "Import from quickemu configuration file"),
-        ("Browse for config file...", "Browse filesystem for .xml or .conf file"),
+        (
+            "libvirt (XML)",
+            "Import from libvirt/virt-manager domain XML",
+        ),
+        (
+            "quickemu (.conf)",
+            "Import from quickemu configuration file",
+        ),
+        (
+            "Browse for config file...",
+            "Browse filesystem for .xml or .conf file",
+        ),
     ];
 
     let items: Vec<ListItem> = options
@@ -114,17 +217,13 @@ fn render_step_select_source(state: &ImportWizardState, frame: &mut Frame, area:
 
 /// Step 2: Select VM from discovered list
 fn render_step_select_vm(state: &ImportWizardState, frame: &mut Frame, area: Rect) {
-    let source_label = match state.source {
-        Some(ImportSource::Libvirt) => "libvirt",
-        Some(ImportSource::Quickemu) => "quickemu",
-        None => "unknown",
-    };
+    let source_label = import_source_label(state.source.as_ref());
 
     let block = Block::default()
         .title(format!(" Import VM - Select {} VM ", source_label))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -135,7 +234,9 @@ fn render_step_select_vm(state: &ImportWizardState, frame: &mut Frame, area: Rec
         .constraints([
             Constraint::Length(1), // Description
             Constraint::Length(1), // Spacer
-            Constraint::Min(8),   // VM list
+            Constraint::Length(3), // Summary
+            Constraint::Length(1), // Spacer
+            Constraint::Min(8),    // VM list
             Constraint::Length(2), // Help
         ])
         .split(inner);
@@ -148,15 +249,20 @@ fn render_step_select_vm(state: &ImportWizardState, frame: &mut Frame, area: Rec
                 Style::default().fg(Color::Yellow),
             )),
             Line::from(""),
+            Line::from(Span::styled(
+                "Scan found nothing. Manual browse is still available.",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
             Line::from("Press [b] to browse for a config file manually."),
         ])
         .alignment(Alignment::Center);
-        frame.render_widget(msg, chunks[2]);
+        frame.render_widget(msg, chunks[4]);
 
         let help = Paragraph::new("[b] Browse  [Esc] Back")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(Color::Gray))
             .alignment(Alignment::Center);
-        frame.render_widget(help, chunks[3]);
+        frame.render_widget(help, chunks[5]);
         return;
     }
 
@@ -166,6 +272,7 @@ fn render_step_select_vm(state: &ImportWizardState, frame: &mut Frame, area: Rec
     ))
     .style(Style::default().fg(Color::White));
     frame.render_widget(desc, chunks[0]);
+    render_import_summary(frame, chunks[2], state);
 
     let items: Vec<ListItem> = state
         .discovered_vms
@@ -205,18 +312,18 @@ fn render_step_select_vm(state: &ImportWizardState, frame: &mut Frame, area: Rec
     list_state.select(Some(state.selected_vm_index));
 
     let list = List::new(items).highlight_symbol("> ");
-    frame.render_stateful_widget(list, chunks[2], &mut list_state);
+    frame.render_stateful_widget(list, chunks[4], &mut list_state);
 
     if let Some(ref err) = state.error_message {
         let help = Paragraph::new(err.as_str())
             .style(Style::default().fg(Color::Red))
             .alignment(Alignment::Center);
-        frame.render_widget(help, chunks[3]);
+        frame.render_widget(help, chunks[5]);
     } else {
         let help = Paragraph::new("[Enter] Select  [b] Browse  [Esc] Back")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(Color::Gray))
             .alignment(Alignment::Center);
-        frame.render_widget(help, chunks[3]);
+        frame.render_widget(help, chunks[5]);
     }
 }
 
@@ -226,7 +333,7 @@ fn render_step_warnings(state: &ImportWizardState, frame: &mut Frame, area: Rect
         .title(" Import VM - Compatibility ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -235,12 +342,29 @@ fn render_step_warnings(state: &ImportWizardState, frame: &mut Frame, area: Rect
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(3), // Header
+            Constraint::Length(3), // Summary
             Constraint::Length(1), // Spacer
-            Constraint::Min(8),   // Warnings list
+            Constraint::Length(5), // Header + summary
+            Constraint::Length(1), // Spacer
+            Constraint::Min(8),    // Warnings list
             Constraint::Length(2), // Help
         ])
         .split(inner);
+
+    render_import_summary(frame, chunks[0], state);
+
+    let (info_count, warn_count, risk_count) = if let Some(ref vm) = state.selected_vm {
+        vm.import_notes.iter().fold(
+            (0, 0, 0),
+            |(info, warn, risk), note| match classify_import_note(note) {
+                ImportNoteSeverity::Info => (info + 1, warn, risk),
+                ImportNoteSeverity::Warning => (info, warn + 1, risk),
+                ImportNoteSeverity::Risk => (info, warn, risk + 1),
+            },
+        )
+    } else {
+        (0, 0, 0)
+    };
 
     let header = Paragraph::new(vec![
         Line::from(Span::styled(
@@ -251,27 +375,49 @@ fn render_step_warnings(state: &ImportWizardState, frame: &mut Frame, area: Rect
         )),
         Line::from(""),
         Line::from("  The source VM uses features that require adjustment:"),
+        Line::from(vec![
+            Span::styled("  Summary: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("{} info", info_count),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("{} warnings", warn_count),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("{} risks", risk_count),
+                Style::default().fg(Color::Red),
+            ),
+        ]),
     ]);
-    frame.render_widget(header, chunks[0]);
+    frame.render_widget(header, chunks[2]);
 
     if let Some(ref vm) = state.selected_vm {
         let mut lines = Vec::new();
         for note in &vm.import_notes {
+            let severity = classify_import_note(note);
+            let (color, label) = severity_style(severity);
             lines.push(Line::from(vec![
-                Span::styled("  * ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("  [{}] ", label),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(note.as_str(), Style::default().fg(Color::White)),
             ]));
             lines.push(Line::from(""));
         }
 
         let warnings = Paragraph::new(lines).wrap(Wrap { trim: false });
-        frame.render_widget(warnings, chunks[2]);
+        frame.render_widget(warnings, chunks[4]);
     }
 
     let help = Paragraph::new("[Enter] Accept changes and continue  [Esc] Cancel import")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[3]);
+    frame.render_widget(help, chunks[5]);
 }
 
 /// Step 4: Configure disk handling
@@ -280,7 +426,7 @@ fn render_step_configure_disk(state: &ImportWizardState, frame: &mut Frame, area
         .title(" Import VM - Disk Handling ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -289,17 +435,21 @@ fn render_step_configure_disk(state: &ImportWizardState, frame: &mut Frame, area
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
+            Constraint::Length(3), // Summary
+            Constraint::Length(1), // Spacer
             Constraint::Length(2), // Description
             Constraint::Length(1), // Spacer
-            Constraint::Min(6),   // Disk info + options
+            Constraint::Min(6),    // Disk info + options
             Constraint::Length(4), // Warning text
             Constraint::Length(2), // Help
         ])
         .split(inner);
 
+    render_import_summary(frame, chunks[0], state);
+
     let desc = Paragraph::new("Choose how to handle the source VM's disk image(s):")
         .style(Style::default().fg(Color::White));
-    frame.render_widget(desc, chunks[0]);
+    frame.render_widget(desc, chunks[2]);
 
     let mut content_lines: Vec<Line> = Vec::new();
 
@@ -320,11 +470,7 @@ fn render_step_configure_disk(state: &ImportWizardState, frame: &mut Frame, area
                 Span::styled("  Disk: ", Style::default().fg(Color::Gray)),
                 Span::styled(
                     format!("{} ({}){}", disk.display(), size_str, status),
-                    Style::default().fg(if readable {
-                        Color::White
-                    } else {
-                        Color::Red
-                    }),
+                    Style::default().fg(if readable { Color::White } else { Color::Red }),
                 ),
             ]));
         }
@@ -333,15 +479,28 @@ fn render_step_configure_disk(state: &ImportWizardState, frame: &mut Frame, area
 
     // Disk action options
     let actions = [
-        (ImportDiskAction::Symlink, "Symlink", "Instant, saves space. Original must stay in place."),
-        (ImportDiskAction::Copy, "Copy", "Independent copy. Slow for large disks."),
-        (ImportDiskAction::Move, "Move", "Relocates disk to VM library."),
+        (
+            ImportDiskAction::Symlink,
+            "Symlink",
+            "Instant, saves space. Original must stay in place.",
+        ),
+        (
+            ImportDiskAction::Copy,
+            "Copy",
+            "Independent copy. Slow for large disks.",
+        ),
+        (
+            ImportDiskAction::Move,
+            "Move",
+            "Relocates disk to VM library.",
+        ),
     ];
 
     for (i, (action, label, desc)) in actions.iter().enumerate() {
         let selected = state.disk_action == *action;
         let focused = i == state.field_focus;
         let radio = if selected { "(*)" } else { "( )" };
+        let (_, badge, badge_color) = import_disk_action_summary(*action);
         let style = if focused {
             Style::default()
                 .fg(Color::Yellow)
@@ -355,14 +514,17 @@ fn render_step_configure_disk(state: &ImportWizardState, frame: &mut Frame, area
         content_lines.push(Line::from(vec![
             Span::styled(format!("  {} {} ", radio, label), style),
             Span::styled(
-                format!("- {}", desc),
-                Style::default().fg(Color::DarkGray),
+                format!("[{}] ", badge),
+                Style::default()
+                    .fg(badge_color)
+                    .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(format!("- {}", desc), Style::default().fg(Color::Gray)),
         ]));
     }
 
     let content = Paragraph::new(content_lines);
-    frame.render_widget(content, chunks[2]);
+    frame.render_widget(content, chunks[4]);
 
     let warning_text = match state.disk_action {
         ImportDiskAction::Symlink => {
@@ -376,14 +538,14 @@ fn render_step_configure_disk(state: &ImportWizardState, frame: &mut Frame, area
         }
     };
     let warning = Paragraph::new(warning_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .wrap(Wrap { trim: false });
-    frame.render_widget(warning, chunks[3]);
+    frame.render_widget(warning, chunks[5]);
 
     let help = Paragraph::new("[Enter] Continue  [Esc] Back")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[4]);
+    frame.render_widget(help, chunks[6]);
 }
 
 /// Step 5: Review and import
@@ -392,7 +554,7 @@ fn render_step_review(state: &ImportWizardState, frame: &mut Frame, area: Rect) 
         .title(" Import VM - Review & Import ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -401,10 +563,14 @@ fn render_step_review(state: &ImportWizardState, frame: &mut Frame, area: Rect) 
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Min(16),  // Config summary
+            Constraint::Length(3), // Summary
+            Constraint::Length(1), // Spacer
+            Constraint::Min(16),   // Config summary
             Constraint::Length(2), // Help
         ])
         .split(inner);
+
+    render_import_summary(frame, chunks[0], state);
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -423,10 +589,7 @@ fn render_step_review(state: &ImportWizardState, frame: &mut Frame, area: Rect) 
         lines.push(Line::from(vec![
             Span::styled("  VM Name:    ", Style::default().fg(Color::Gray)),
             Span::styled(&state.vm_name, Style::default().fg(Color::White)),
-            Span::styled(
-                "  [Tab to edit]",
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled("  [Tab to edit]", Style::default().fg(Color::DarkGray)),
         ]));
     }
 
@@ -531,12 +694,12 @@ fn render_step_review(state: &ImportWizardState, frame: &mut Frame, area: Rect) 
     }
 
     let summary = Paragraph::new(lines);
-    frame.render_widget(summary, chunks[0]);
+    frame.render_widget(summary, chunks[2]);
 
     let help = Paragraph::new("[Enter] Import  [Tab] Edit name  [Esc] Back")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[1]);
+    frame.render_widget(help, chunks[3]);
 }
 
 // =========================================================================
@@ -580,7 +743,11 @@ fn handle_select_source(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            let focus = app.import_state.as_ref().map(|s| s.field_focus).unwrap_or(0);
+            let focus = app
+                .import_state
+                .as_ref()
+                .map(|s| s.field_focus)
+                .unwrap_or(0);
             match focus {
                 0 => {
                     // libvirt
@@ -651,11 +818,10 @@ fn handle_select_vm(app: &mut App, key: KeyEvent) -> Result<()> {
                 if let Some(vm) = state.discovered_vms.get(state.selected_vm_index).cloned() {
                     let library_path = app.config.vm_library_path.clone();
                     state.vm_name = vm.name.clone();
-                    state.folder_name =
-                        crate::app::CreateWizardState::find_available_folder_name(
-                            &library_path,
-                            &crate::app::CreateWizardState::generate_folder_name(&vm.name),
-                        );
+                    state.folder_name = crate::app::CreateWizardState::find_available_folder_name(
+                        &library_path,
+                        &crate::app::CreateWizardState::generate_folder_name(&vm.name),
+                    );
                     state.selected_vm = Some(vm.clone());
                     state.error_message = None;
                     state.field_focus = 0;
@@ -701,7 +867,11 @@ fn handle_configure_disk(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Esc => {
             if let Some(ref mut state) = app.import_state {
                 // Go back to warnings if they existed, otherwise to VM selection
-                if state.selected_vm.as_ref().map(|vm| !vm.import_notes.is_empty()).unwrap_or(false)
+                if state
+                    .selected_vm
+                    .as_ref()
+                    .map(|vm| !vm.import_notes.is_empty())
+                    .unwrap_or(false)
                 {
                     state.step = ImportStep::CompatibilityWarnings;
                 } else {
@@ -866,4 +1036,66 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     Rect::new(x, y, width, height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_import_notes_by_severity() {
+        assert!(matches!(
+            classify_import_note("Bridge backend directly exposed to LAN"),
+            ImportNoteSeverity::Risk
+        ));
+        assert!(matches!(
+            classify_import_note(
+                "Changed to user networking because libvirt virtual network is unsupported"
+            ),
+            ImportNoteSeverity::Warning
+        ));
+        assert!(matches!(
+            classify_import_note("Imported default memory and CPU settings"),
+            ImportNoteSeverity::Info
+        ));
+    }
+
+    #[test]
+    fn import_summary_uses_selected_vm_and_disk_action() {
+        let mut state = ImportWizardState {
+            source: Some(ImportSource::Quickemu),
+            disk_action: ImportDiskAction::Copy,
+            selected_vm: Some(crate::app::ImportableVm {
+                name: "ubuntu-lab".to_string(),
+                config_path: "/tmp/test.conf".into(),
+                source: ImportSource::Quickemu,
+                qemu_config: crate::app::WizardQemuConfig::default(),
+                disk_paths: Vec::new(),
+                detected_os_profile: Some("linux-ubuntu".to_string()),
+                import_notes: Vec::new(),
+                disks_readable: Vec::new(),
+            }),
+            ..ImportWizardState::default()
+        };
+
+        let rendered = import_summary_line(&state);
+        let text: String = rendered
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.contains("quickemu"));
+        assert!(text.contains("ubuntu-lab"));
+        assert!(text.contains("copy [safe]"));
+        assert!(text.contains("linux-ubuntu"));
+
+        state.disk_action = ImportDiskAction::Move;
+        let rendered = import_summary_line(&state);
+        let text: String = rendered
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.contains("move [destructive]"));
+    }
 }

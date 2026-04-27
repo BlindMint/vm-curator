@@ -7,10 +7,15 @@ use std::time::Instant;
 use crate::commands::qemu_system::NetworkCapabilities;
 use crate::config::Config;
 use crate::hardware::{MultiGpuPassthroughStatus, PciDevice, SingleGpuConfig, UsbDevice};
-use crate::metadata::{AsciiArtStore, HierarchyConfig, MetadataStore, OsInfo, QemuProfileStore, SettingsHelpStore, SharedFoldersHelpStore};
+use crate::metadata::{
+    AsciiArtStore, HierarchyConfig, MetadataStore, OsInfo, QemuProfileStore, SettingsHelpStore,
+    SharedFoldersHelpStore,
+};
 use crate::ui::widgets::build_visual_order;
-use crate::vm::{discover_vms, BootMode, DiscoveredVm, LaunchOptions, QemuProcess, SharedFolder, Snapshot};
 use crate::vm::qemu_config::{PortForward, PortProtocol};
+use crate::vm::{
+    discover_vms, BootMode, DiscoveredVm, LaunchOptions, QemuProcess, SharedFolder, Snapshot,
+};
 
 /// Application screens/views
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,9 +269,10 @@ impl WizardQemuConfig {
     /// Create from a QEMU profile
     pub fn from_profile(profile: &crate::metadata::QemuProfile) -> Self {
         // Check if profile has GL acceleration hints in extra_args
-        let gl_acceleration = profile.extra_args.iter().any(|arg|
-            arg.contains("virtio-vga-gl") || arg.contains("gl=on")
-        );
+        let gl_acceleration = profile
+            .extra_args
+            .iter()
+            .any(|arg| arg.contains("virtio-vga-gl") || arg.contains("gl=on"));
 
         Self {
             emulator: profile.emulator.clone(),
@@ -361,6 +367,8 @@ pub struct CreateWizardState {
     pub qemu_config: WizardQemuConfig,
     /// Auto-launch VM after creation
     pub auto_launch: bool,
+    /// Whether the user explicitly changed the auto-launch toggle
+    pub auto_launch_overridden: bool,
     /// Currently focused field index (for navigation)
     pub field_focus: usize,
     /// OS list scroll position - reserved for virtual scrolling
@@ -418,15 +426,13 @@ impl Default for CreateWizardState {
             bios_rom_path: None,
             floppy_path: None,
             qemu_config: WizardQemuConfig::default(),
-            auto_launch: true,
+            auto_launch: false,
+            auto_launch_overridden: false,
             field_focus: 0,
             os_list_scroll: 0,
             os_filter: String::new(),
             selected_category: 0,
-            expanded_categories: vec![
-                "windows".to_string(),
-                "linux".to_string(),
-            ],
+            expanded_categories: vec!["windows".to_string(), "linux".to_string()],
             os_list_selected: 0,
             error_message: None,
             editing_field: None,
@@ -436,18 +442,30 @@ impl Default for CreateWizardState {
 }
 
 impl CreateWizardState {
+    /// Whether the current wizard inputs imply something useful to auto-launch.
+    pub fn default_auto_launch_enabled(&self) -> bool {
+        self.use_existing_disk || self.iso_path.is_some() || self.floppy_path.is_some()
+    }
+
+    /// Apply the context-sensitive auto-launch default unless the user already overrode it.
+    pub fn sync_auto_launch_default(&mut self) {
+        if !self.auto_launch_overridden {
+            self.auto_launch = self.default_auto_launch_enabled();
+        }
+    }
+
+    /// Toggle auto-launch and remember that the user made an explicit choice.
+    pub fn toggle_auto_launch(&mut self) {
+        self.auto_launch = !self.auto_launch;
+        self.auto_launch_overridden = true;
+    }
+
     /// Generate folder name from VM display name
     pub fn generate_folder_name(display_name: &str) -> String {
         display_name
             .to_lowercase()
             .chars()
-            .map(|c| {
-                if c.is_alphanumeric() {
-                    c
-                } else {
-                    '-'
-                }
-            })
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
             .collect::<String>()
             .split('-')
             .filter(|s| !s.is_empty())
@@ -747,6 +765,8 @@ pub struct App {
     pub background_tx: Sender<BackgroundResult>,
     /// Whether a background operation is in progress
     pub loading: bool,
+    /// Message shown while a background operation is running
+    pub loading_message: Option<String>,
     /// Error dialog content (for detailed errors)
     pub error_detail: Option<String>,
     /// Error dialog scroll position
@@ -823,12 +843,38 @@ pub struct FileBrowserEntry {
 
 /// Background operation result
 pub enum BackgroundResult {
-    SnapshotCreated { name: String, success: bool, error: Option<String> },
-    SnapshotRestored { name: String, success: bool, error: Option<String> },
-    SnapshotDeleted { name: String, success: bool, error: Option<String> },
+    SnapshotCreated {
+        name: String,
+        success: bool,
+        error: Option<String>,
+    },
+    SnapshotRestored {
+        name: String,
+        success: bool,
+        error: Option<String>,
+    },
+    SnapshotDeleted {
+        name: String,
+        success: bool,
+        error: Option<String>,
+    },
+    VmCreated {
+        vm_name: String,
+        launch_script: Option<PathBuf>,
+        auto_launch: bool,
+        boot_mode: BootMode,
+        error: Option<String>,
+    },
+    VmLaunched {
+        vm_name: String,
+        error: Option<String>,
+    },
     /// Reserved for async snapshot loading
     #[allow(dead_code)]
-    SnapshotsLoaded { snapshots: Vec<Snapshot>, error: Option<String> },
+    SnapshotsLoaded {
+        snapshots: Vec<Snapshot>,
+        error: Option<String>,
+    },
 }
 
 impl App {
@@ -945,6 +991,7 @@ impl App {
             background_rx,
             background_tx,
             loading: false,
+            loading_message: None,
             error_detail: None,
             error_scroll: 0,
             info_scroll: 0,
@@ -1016,14 +1063,14 @@ impl App {
 
     /// Get available network backend options based on detected capabilities
     pub fn get_network_backend_options(&self) -> Vec<(&str, &str)> {
-        let mut options = vec![
-            ("user", "User/SLIRP (NAT) - Default, works everywhere"),
-        ];
+        let mut options = vec![("user", "User/SLIRP (NAT) - Default, works everywhere")];
         if self.network_caps.passt_available {
             options.push(("passt", "passt - Fast NAT, ping works"));
         }
         if self.network_caps.bridge_helper_path.is_some() {
-            if !self.network_caps.system_bridges.is_empty() && self.network_caps.bridge_helper_configured {
+            if !self.network_caps.allowed_bridges.is_empty()
+                && self.network_caps.bridge_helper_configured
+            {
                 options.push(("bridge", "Bridge - Full network, own IP"));
             } else {
                 options.push(("bridge", "Bridge - Requires one-time setup"));
@@ -1125,7 +1172,12 @@ impl App {
         }
 
         // Rebuild visual order for hierarchy navigation
-        self.visual_order = build_visual_order(&self.vms, &self.filtered_indices, &self.hierarchy, &self.metadata);
+        self.visual_order = build_visual_order(
+            &self.vms,
+            &self.filtered_indices,
+            &self.hierarchy,
+            &self.metadata,
+        );
 
         // Reset selection if out of bounds
         if self.selected_vm >= self.visual_order.len() {
@@ -1239,7 +1291,8 @@ impl App {
 
     /// Remove the currently selected shared folder
     pub fn remove_shared_folder(&mut self) {
-        if !self.shared_folders.is_empty() && self.shared_folder_selected < self.shared_folders.len()
+        if !self.shared_folders.is_empty()
+            && self.shared_folder_selected < self.shared_folders.len()
         {
             self.shared_folders.remove(self.shared_folder_selected);
             if self.shared_folder_selected >= self.shared_folders.len()
@@ -1281,7 +1334,11 @@ impl App {
 
             // Try to find and select the paired audio device
             if let Some(audio) = crate::hardware::find_gpu_audio_pair(gpu, &self.pci_devices) {
-                if let Some(audio_idx) = self.pci_devices.iter().position(|d| d.address == audio.address) {
+                if let Some(audio_idx) = self
+                    .pci_devices
+                    .iter()
+                    .position(|d| d.address == audio.address)
+                {
                     self.selected_pci_devices.push(audio_idx);
                 }
             }
@@ -1330,6 +1387,18 @@ impl App {
         self.status_time = Some(Instant::now());
     }
 
+    /// Start a loading state with a visible message
+    pub fn start_loading(&mut self, msg: impl Into<String>) {
+        self.loading = true;
+        self.loading_message = Some(msg.into());
+    }
+
+    /// Stop the current loading state
+    pub fn stop_loading(&mut self) {
+        self.loading = false;
+        self.loading_message = None;
+    }
+
     /// Show a detailed error in a scrollable dialog
     pub fn show_error(&mut self, error: impl Into<String>) {
         self.error_detail = Some(error.into());
@@ -1356,9 +1425,13 @@ impl App {
     pub fn check_background_results(&mut self) {
         // Non-blocking check for results
         while let Ok(result) = self.background_rx.try_recv() {
-            self.loading = false;
+            self.stop_loading();
             match result {
-                BackgroundResult::SnapshotCreated { name, success, error } => {
+                BackgroundResult::SnapshotCreated {
+                    name,
+                    success,
+                    error,
+                } => {
                     if success {
                         self.set_status(format!("Created snapshot: {}", name));
                         // Reload snapshots
@@ -1367,14 +1440,22 @@ impl App {
                         self.set_status(format!("Error creating snapshot: {}", e));
                     }
                 }
-                BackgroundResult::SnapshotRestored { name, success, error } => {
+                BackgroundResult::SnapshotRestored {
+                    name,
+                    success,
+                    error,
+                } => {
                     if success {
                         self.set_status(format!("Restored snapshot: {}", name));
                     } else if let Some(e) = error {
                         self.set_status(format!("Error restoring snapshot: {}", e));
                     }
                 }
-                BackgroundResult::SnapshotDeleted { name, success, error } => {
+                BackgroundResult::SnapshotDeleted {
+                    name,
+                    success,
+                    error,
+                } => {
                     if success {
                         self.set_status(format!("Deleted snapshot: {}", name));
                         let _ = self.load_snapshots();
@@ -1388,6 +1469,84 @@ impl App {
                     } else {
                         self.snapshots = snapshots;
                         self.selected_snapshot = 0;
+                    }
+                }
+                BackgroundResult::VmCreated {
+                    vm_name,
+                    launch_script,
+                    auto_launch,
+                    boot_mode,
+                    error,
+                } => {
+                    if let Some(e) = error {
+                        if let Some(ref mut state) = self.wizard_state {
+                            state.error_message = Some(format!("Failed to create VM: {}", e));
+                        } else {
+                            self.set_status(format!("Failed to create VM: {}", e));
+                        }
+                        continue;
+                    }
+
+                    self.cancel_wizard();
+
+                    if let Err(e) = self.refresh_vms() {
+                        self.set_status(format!("VM created but refresh failed: {}", e));
+                        continue;
+                    }
+
+                    let Some(launch_script) = launch_script else {
+                        self.set_status(format!("VM created: {}", vm_name));
+                        continue;
+                    };
+
+                    let Some(vm_index) = self
+                        .vms
+                        .iter()
+                        .position(|vm| vm.launch_script == launch_script)
+                    else {
+                        self.set_status(format!(
+                            "VM created but could not be selected: {}",
+                            vm_name
+                        ));
+                        continue;
+                    };
+
+                    if let Some(visual_idx) = self.visual_order.iter().position(|&filtered_idx| {
+                        self.filtered_indices.get(filtered_idx) == Some(&vm_index)
+                    }) {
+                        self.selected_vm = visual_idx;
+                    }
+
+                    if auto_launch {
+                        if let Some(vm) = self.selected_vm().cloned() {
+                            self.boot_mode = boot_mode;
+                            let options = self.get_launch_options();
+                            let tx = self.background_tx.clone();
+                            let vm_name_clone = vm_name.clone();
+                            self.start_loading(format!("Launching {}...", vm_name));
+
+                            std::thread::spawn(move || {
+                                let result = crate::vm::launch_vm_sync(&vm, &options);
+                                let _ = tx.send(BackgroundResult::VmLaunched {
+                                    vm_name: vm_name_clone,
+                                    error: result.err().map(|e| e.to_string()),
+                                });
+                            });
+                        } else {
+                            self.set_status(format!(
+                                "VM created but auto-launch could not find {}",
+                                vm_name
+                            ));
+                        }
+                    } else {
+                        self.set_status(format!("VM created: {}", vm_name));
+                    }
+                }
+                BackgroundResult::VmLaunched { vm_name, error } => {
+                    if let Some(e) = error {
+                        self.set_status(format!("VM created but launch failed: {}", e));
+                    } else {
+                        self.set_status(format!("Launched: {}", vm_name));
                     }
                 }
             }
@@ -1404,7 +1563,8 @@ impl App {
         if let Some(processes) = latest {
             self.running_vms = self.match_running_vms(&processes);
             // Clean up stopping_vms for VMs that have actually stopped
-            self.stopping_vms.retain(|id, _| self.running_vms.contains_key(id));
+            self.stopping_vms
+                .retain(|id, _| self.running_vms.contains_key(id));
         }
     }
 
@@ -1458,8 +1618,12 @@ impl App {
             FileBrowserMode::Disk => &[".qcow2", ".QCOW2", ".qcow", ".QCOW"],
             FileBrowserMode::Directory => &[],
             FileBrowserMode::ImportConfig => &[".xml", ".XML", ".conf"],
-            FileBrowserMode::Bios => &[".bin", ".BIN", ".rom", ".ROM", ".qcow2", ".QCOW2", ".fd", ".FD"],
-            FileBrowserMode::Floppy => &[".img", ".IMG", ".ima", ".IMA", ".flp", ".FLP", ".vfd", ".VFD"],
+            FileBrowserMode::Bios => &[
+                ".bin", ".BIN", ".rom", ".ROM", ".qcow2", ".QCOW2", ".fd", ".FD",
+            ],
+            FileBrowserMode::Floppy => &[
+                ".img", ".IMG", ".ima", ".IMA", ".flp", ".FLP", ".vfd", ".VFD",
+            ],
         };
 
         // For Directory mode, add a [Select This Directory] sentinel entry first
@@ -1566,7 +1730,8 @@ impl App {
     /// Save the editor content back to the launch.sh file
     pub fn save_script_from_editor(&mut self) -> Result<()> {
         // Get the launch script path before we need mutable access
-        let launch_script_path = self.selected_vm()
+        let launch_script_path = self
+            .selected_vm()
             .map(|vm| vm.launch_script.clone())
             .ok_or_else(|| anyhow::anyhow!("No VM selected"))?;
 
@@ -1625,9 +1790,10 @@ impl App {
         }
     }
 
-    /// Save the editor content as notes to vm-curator.toml
+    /// Save the editor content as notes to vm-foundry.toml
     pub fn save_notes_from_editor(&mut self) -> Result<()> {
-        let vm = self.selected_vm()
+        let vm = self
+            .selected_vm()
             .ok_or_else(|| anyhow::anyhow!("No VM selected"))?;
 
         let vm_path = vm.path.clone();
@@ -1637,7 +1803,11 @@ impl App {
         let notes_text = self.script_editor_lines.join("\n");
         // Trim trailing whitespace/newlines
         let notes_text = notes_text.trim_end().to_string();
-        let notes = if notes_text.is_empty() { None } else { Some(notes_text.as_str()) };
+        let notes = if notes_text.is_empty() {
+            None
+        } else {
+            Some(notes_text.as_str())
+        };
 
         crate::vm::create::write_vm_metadata(
             &vm_path,
@@ -1665,7 +1835,9 @@ impl App {
 
     /// Start the VM creation wizard
     pub fn start_create_wizard(&mut self) {
-        let state = CreateWizardState {
+        self.reset_wizard_port_forward_state();
+
+        let mut state = CreateWizardState {
             disk_size_gb: self.config.default_disk_size_gb,
             qemu_config: WizardQemuConfig {
                 memory_mb: self.config.default_memory_mb,
@@ -1676,6 +1848,7 @@ impl App {
             },
             ..CreateWizardState::default()
         };
+        state.sync_auto_launch_default();
 
         self.wizard_state = Some(state);
         self.push_screen(Screen::CreateWizard);
@@ -1683,6 +1856,7 @@ impl App {
 
     /// Cancel the wizard and return to main menu
     pub fn cancel_wizard(&mut self) {
+        self.reset_wizard_port_forward_state();
         self.wizard_state = None;
         // Pop all wizard-related screens
         while matches!(
@@ -1695,33 +1869,51 @@ impl App {
 
     /// Move to the next wizard step
     pub fn wizard_next_step(&mut self) -> Result<(), String> {
-        if let Some(ref mut state) = self.wizard_state {
-            // Validate current step
-            state.can_proceed()?;
+        let next = match self.wizard_state.as_ref() {
+            Some(state) => {
+                state.can_proceed()?;
+                state.step.next()
+            }
+            None => return Err("Wizard not active".to_string()),
+        };
 
-            // Move to next step
-            if let Some(next) = state.step.next() {
+        if let Some(next) = next {
+            self.reset_wizard_port_forward_state();
+            if let Some(ref mut state) = self.wizard_state {
                 state.step = next;
                 state.field_focus = 0;
+                state.editing_field = None;
+                state.wizard_edit_buffer.clear();
                 state.error_message = None;
-                Ok(())
-            } else {
-                Err("Already at final step".to_string())
             }
+            Ok(())
         } else {
-            Err("Wizard not active".to_string())
+            Err("Already at final step".to_string())
         }
     }
 
     /// Move to the previous wizard step
     pub fn wizard_prev_step(&mut self) {
-        if let Some(ref mut state) = self.wizard_state {
-            if let Some(prev) = state.step.prev() {
+        let prev = self
+            .wizard_state
+            .as_ref()
+            .and_then(|state| state.step.prev());
+        if let Some(prev) = prev {
+            self.reset_wizard_port_forward_state();
+            if let Some(ref mut state) = self.wizard_state {
                 state.step = prev;
                 state.field_focus = 0;
+                state.editing_field = None;
+                state.wizard_edit_buffer.clear();
                 state.error_message = None;
             }
         }
+    }
+
+    fn reset_wizard_port_forward_state(&mut self) {
+        self.wizard_editing_port_forwards = false;
+        self.wizard_pf_selected = 0;
+        self.wizard_adding_pf = None;
     }
 
     /// Select an OS profile in the wizard
@@ -1730,18 +1922,31 @@ impl App {
 
         // Get full display name from metadata (e.g., "CachyOS (rolling)")
         // Fall back to profile's display_name if not in metadata
-        let new_display_name = self.metadata.get(os_id)
+        let new_display_name = self
+            .metadata
+            .get(os_id)
             .and_then(|info| info.display_name.clone())
-            .or_else(|| self.qemu_profiles.get(os_id).map(|p| p.display_name.clone()))
+            .or_else(|| {
+                self.qemu_profiles
+                    .get(os_id)
+                    .map(|p| p.display_name.clone())
+            })
             .unwrap_or_else(|| os_id.to_string());
 
         // Get the previous OS's display name (if any) to check if user customized the name
-        let previous_default_name = self.wizard_state.as_ref()
+        let previous_default_name = self
+            .wizard_state
+            .as_ref()
             .and_then(|s| s.selected_os.as_ref())
             .and_then(|prev_id| {
-                self.metadata.get(prev_id)
+                self.metadata
+                    .get(prev_id)
                     .and_then(|info| info.display_name.clone())
-                    .or_else(|| self.qemu_profiles.get(prev_id).map(|p| p.display_name.clone()))
+                    .or_else(|| {
+                        self.qemu_profiles
+                            .get(prev_id)
+                            .map(|p| p.display_name.clone())
+                    })
             });
 
         if let Some(ref mut state) = self.wizard_state {
@@ -1756,7 +1961,10 @@ impl App {
                 // 1. Name is empty, OR
                 // 2. Name matches the previous OS's default (user hasn't customized it)
                 let should_update_name = state.vm_name.is_empty()
-                    || previous_default_name.as_ref().map(|n| n == &state.vm_name).unwrap_or(false);
+                    || previous_default_name
+                        .as_ref()
+                        .map(|n| n == &state.vm_name)
+                        .unwrap_or(false);
 
                 if should_update_name {
                     state.vm_name = new_display_name;

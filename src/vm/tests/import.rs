@@ -131,11 +131,8 @@ boot="efi"
 tpm="on"
 "#;
 
-    let vm = parse_quickemu_conf_str(
-        conf,
-        Path::new("/home/user/quickemu/ubuntu-22.04.conf"),
-    )
-    .unwrap();
+    let vm =
+        parse_quickemu_conf_str(conf, Path::new("/home/user/quickemu/ubuntu-22.04.conf")).unwrap();
 
     assert_eq!(vm.name, "ubuntu-22.04");
     assert_eq!(vm.qemu_config.memory_mb, 4096);
@@ -191,7 +188,19 @@ fn test_map_network_bridge() {
     assert_eq!(backend, "bridge");
     assert_eq!(bridge, Some("br0".to_string()));
     assert_eq!(model, "virtio-net-pci");
-    assert!(notes.is_empty());
+    assert!(notes.iter().any(|note| note.contains("directly exposed")));
+}
+
+#[test]
+fn test_map_network_private_libvirt_bridge_note() {
+    let mut notes = Vec::new();
+    let (backend, bridge, model) = map_network("bridge", "virtio", "virbr1", &mut notes);
+    assert_eq!(backend, "bridge");
+    assert_eq!(bridge, Some("virbr1".to_string()));
+    assert_eq!(model, "virtio-net-pci");
+    assert!(notes
+        .iter()
+        .any(|note| note.contains("private/libvirt bridge")));
 }
 
 #[test]

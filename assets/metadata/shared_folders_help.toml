@@ -1,7 +1,7 @@
 # Shared Folders Mount Instructions
 #
 # Tier-based instructions for mounting shared folders in guest VMs.
-# Users can override at: ~/.config/vm-curator/metadata/shared_folders_help.toml
+# Users can override at: ~/.config/vm-foundry/metadata/shared_folders_help.toml
 # Use {TAG} as placeholder for the mount tag name.
 
 [empty_state]

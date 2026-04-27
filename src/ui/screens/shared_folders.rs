@@ -32,7 +32,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -42,7 +42,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Length(2), // Left margin
-            Constraint::Min(1),   // Content
+            Constraint::Min(1),    // Content
             Constraint::Length(2), // Right margin
         ])
         .split(inner);
@@ -51,11 +51,11 @@ pub fn render(app: &App, frame: &mut Frame) {
     let v_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Top padding
+            Constraint::Length(1),                       // Top padding
             Constraint::Length(folder_list_height(app)), // Folder list
-            Constraint::Length(1), // Separator
-            Constraint::Min(4),   // Mount instructions
-            Constraint::Length(2), // Help text
+            Constraint::Length(1),                       // Separator
+            Constraint::Min(4),                          // Mount instructions
+            Constraint::Length(2),                       // Help text
         ])
         .split(h_chunks[1]);
 
@@ -192,7 +192,7 @@ pub fn get_mount_tier(app: &App) -> &'static str {
         None => return "unknown",
     };
 
-    // Get the OS profile ID from vm-curator.toml metadata, fall back to directory ID
+    // Get the OS profile ID from vm-foundry.toml metadata, fall back to directory ID
     let profile_id = vm.os_profile.clone().or_else(|| Some(vm.id.clone()));
 
     // Check specific unsupported profile IDs first

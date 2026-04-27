@@ -9,10 +9,170 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
+use std::thread;
 
-use crate::app::{App, WizardStep, WizardField, WizardQemuConfig};
+use crate::app::{App, BackgroundResult, WizardField, WizardQemuConfig, WizardStep};
+use crate::commands::qemu_system::{classify_bridge, is_lab_friendly_bridge, lab_friendly_bridges};
 use crate::metadata::QemuProfileStore;
-use crate::vm::create_vm;
+use crate::vm::{create_vm, BootMode};
+
+const CATEGORY_ORDER: [&str; 11] = [
+    "windows",
+    "linux",
+    "bsd",
+    "unix",
+    "macos",
+    "mobile",
+    "infrastructure",
+    "utilities",
+    "alternative",
+    "retro",
+    "classic-mac",
+];
+
+#[derive(Debug, Clone)]
+enum OsListItem {
+    Category {
+        category: String,
+        display_name: String,
+        has_matches: bool,
+        match_count: usize,
+        expanded: bool,
+    },
+    Os {
+        os_id: String,
+        display_name: String,
+        summary: String,
+    },
+    Custom,
+}
+
+fn auto_launch_label(state: &crate::app::CreateWizardState) -> &'static str {
+    if matches!(auto_launch_boot_mode(state), BootMode::Install) {
+        "Launch VM in install mode after creation"
+    } else {
+        "Launch VM after creation"
+    }
+}
+
+fn auto_launch_boot_mode(state: &crate::app::CreateWizardState) -> BootMode {
+    if let Some(path) = &state.floppy_path {
+        return BootMode::Floppy(path.clone());
+    }
+
+    if let Some(path) = &state.iso_path {
+        if state.is_recovery_image {
+            return BootMode::Recovery(path.clone());
+        }
+        return BootMode::Install;
+    }
+
+    BootMode::Normal
+}
+
+fn wizard_summary_line(app: &App, state: &crate::app::CreateWizardState) -> Line<'static> {
+    let os_name = state
+        .selected_os
+        .as_ref()
+        .and_then(|id| app.qemu_profiles.get(id))
+        .map(|p| p.display_name.clone())
+        .unwrap_or_else(|| "OS: unset".to_string());
+
+    let media = if let Some(path) = &state.iso_path {
+        let kind = if state.is_recovery_image {
+            "recovery"
+        } else {
+            "iso"
+        };
+        format!(
+            "{}: {}",
+            kind,
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("selected")
+        )
+    } else if let Some(path) = &state.floppy_path {
+        format!(
+            "floppy: {}",
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("selected")
+        )
+    } else {
+        "media: none".to_string()
+    };
+
+    let disk = if state.use_existing_disk {
+        "disk: existing".to_string()
+    } else {
+        format!("disk: new {} GB", state.disk_size_gb)
+    };
+
+    let network = if state.qemu_config.network_model == "none" {
+        "net: none".to_string()
+    } else {
+        match state.qemu_config.network_backend.as_str() {
+            "bridge" => format!(
+                "net: bridge:{}",
+                state
+                    .qemu_config
+                    .bridge_name
+                    .as_deref()
+                    .unwrap_or("qemubr0")
+            ),
+            "passt" => "net: passt".to_string(),
+            "none" => "net: disabled".to_string(),
+            _ => "net: user".to_string(),
+        }
+    };
+
+    Line::from(vec![
+        Span::styled(
+            " OS ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{}  ", os_name), Style::default().fg(Color::White)),
+        Span::styled(
+            " MEDIA ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{}  ", media), Style::default().fg(Color::White)),
+        Span::styled(
+            " STORAGE ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{}  ", disk), Style::default().fg(Color::White)),
+        Span::styled(
+            " NET ",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(network, Style::default().fg(Color::White)),
+    ])
+}
+
+fn render_wizard_summary(app: &App, frame: &mut Frame, area: Rect) {
+    let Some(state) = app.wizard_state.as_ref() else {
+        return;
+    };
+
+    let summary = Paragraph::new(vec![wizard_summary_line(app, state)])
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(" Current Selection "),
+        );
+    frame.render_widget(summary, area);
+}
 
 /// Parse a size string with optional suffix (KB, MB, GB, case-insensitive)
 /// Returns value normalized to target unit.
@@ -26,11 +186,11 @@ fn parse_size_with_suffix(input: &str, target_unit: &str) -> Option<u32> {
     }
 
     let (num_str, suffix) = if input.ends_with("GB") {
-        (&input[..input.len()-2], "GB")
+        (&input[..input.len() - 2], "GB")
     } else if input.ends_with("MB") {
-        (&input[..input.len()-2], "MB")
+        (&input[..input.len() - 2], "MB")
     } else if input.ends_with("KB") {
-        (&input[..input.len()-2], "KB")
+        (&input[..input.len() - 2], "KB")
     } else {
         (input.as_str(), target_unit)
     };
@@ -55,6 +215,151 @@ fn parse_size_with_suffix(input: &str, target_unit: &str) -> Option<u32> {
     } else {
         None
     }
+}
+
+fn fuzzy_score(query: &str, candidate: &str) -> Option<i64> {
+    if query.is_empty() {
+        return Some(0);
+    }
+
+    let query = query.to_lowercase();
+    let candidate = candidate.to_lowercase();
+
+    if candidate == query {
+        return Some(10_000);
+    }
+    if candidate.starts_with(&query) {
+        return Some(9_000 - candidate.len() as i64);
+    }
+    if let Some(index) = candidate.find(&query) {
+        return Some(8_000 - index as i64 * 10 - candidate.len() as i64);
+    }
+
+    let query_chars: Vec<char> = query.chars().collect();
+    let mut q_idx = 0usize;
+    let mut gap_penalty = 0i64;
+    let mut previous_match = None;
+    let mut first_match = None;
+    let mut consecutive_bonus = 0i64;
+
+    for (idx, ch) in candidate.chars().enumerate() {
+        if q_idx < query_chars.len() && ch == query_chars[q_idx] {
+            if let Some(prev) = previous_match {
+                if idx == prev + 1 {
+                    consecutive_bonus += 12;
+                } else {
+                    gap_penalty += (idx - prev - 1) as i64;
+                }
+            } else {
+                first_match = Some(idx);
+            }
+            previous_match = Some(idx);
+            q_idx += 1;
+        }
+    }
+
+    if q_idx == query_chars.len() {
+        return Some(
+            5_000 + consecutive_bonus
+                - gap_penalty * 2
+                - first_match.unwrap_or(0) as i64
+                - candidate.len() as i64,
+        );
+    }
+
+    None
+}
+
+fn profile_match_score(query: &str, os_id: &str, display_name: &str, summary: &str) -> Option<i64> {
+    if query.is_empty() {
+        return Some(0);
+    }
+
+    let mut best = fuzzy_score(query, display_name).map(|score| score + 500);
+    if let Some(score) = fuzzy_score(query, os_id).map(|score| score + 250) {
+        best = Some(best.map_or(score, |current| current.max(score)));
+    }
+    if let Some(score) = fuzzy_score(query, summary) {
+        best = Some(best.map_or(score, |current| current.max(score)));
+    }
+    best
+}
+
+fn build_os_list_items(app: &App, state: &crate::app::CreateWizardState) -> Vec<OsListItem> {
+    let mut items = Vec::new();
+    let filter = state.os_filter.trim();
+    let filter_active = !filter.is_empty();
+
+    for category in &CATEGORY_ORDER {
+        let profiles = app.qemu_profiles.list_by_category(category);
+        if profiles.is_empty() {
+            continue;
+        }
+
+        let mut matches = Vec::new();
+        for (original_idx, (os_id, profile)) in profiles.iter().enumerate() {
+            let summary = profile.summary();
+            if let Some(score) = profile_match_score(filter, os_id, &profile.display_name, &summary)
+            {
+                matches.push((
+                    original_idx,
+                    score,
+                    os_id.to_string(),
+                    profile.display_name.to_string(),
+                    summary,
+                ));
+            }
+        }
+
+        if filter_active {
+            matches.sort_by(|a, b| {
+                b.1.cmp(&a.1)
+                    .then_with(|| a.3.to_lowercase().cmp(&b.3.to_lowercase()))
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+        }
+
+        let expanded = if filter_active {
+            true
+        } else {
+            state.is_category_expanded(category)
+        };
+
+        items.push(OsListItem::Category {
+            category: (*category).to_string(),
+            display_name: QemuProfileStore::category_display_name(category).to_string(),
+            has_matches: !matches.is_empty(),
+            match_count: matches.len(),
+            expanded,
+        });
+
+        if expanded {
+            for (_, _, os_id, display_name, summary) in matches {
+                items.push(OsListItem::Os {
+                    os_id,
+                    display_name,
+                    summary,
+                });
+            }
+        }
+    }
+
+    items.push(OsListItem::Custom);
+    items
+}
+
+fn clamp_os_list_selection(state: &mut crate::app::CreateWizardState, item_count: usize) {
+    if item_count == 0 {
+        state.os_list_selected = 0;
+    } else if state.os_list_selected >= item_count {
+        state.os_list_selected = item_count - 1;
+    }
+}
+
+fn first_matching_os_index(items: &[OsListItem]) -> Option<usize> {
+    items
+        .iter()
+        .position(|item| matches!(item, OsListItem::Os { .. }))
 }
 
 /// Render the create wizard based on current step
@@ -95,7 +400,7 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
         .title(" Custom OS Entry ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -110,16 +415,16 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1),   // Intro text
-            Constraint::Length(1),   // Spacer
-            Constraint::Length(3),   // OS Name
-            Constraint::Length(3),   // Publisher
-            Constraint::Length(3),   // Architecture
-            Constraint::Length(1),   // Spacer
-            Constraint::Length(5),   // Base profile selection
-            Constraint::Length(1),   // Spacer
-            Constraint::Min(3),      // Tips
-            Constraint::Length(2),   // Help
+            Constraint::Length(1), // Intro text
+            Constraint::Length(1), // Spacer
+            Constraint::Length(3), // OS Name
+            Constraint::Length(3), // Publisher
+            Constraint::Length(3), // Architecture
+            Constraint::Length(1), // Spacer
+            Constraint::Length(5), // Base profile selection
+            Constraint::Length(1), // Spacer
+            Constraint::Min(3),    // Tips
+            Constraint::Length(2), // Help
         ])
         .split(inner);
 
@@ -134,9 +439,14 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
     let name_editing = matches!(state.editing_field, Some(WizardField::CustomOsName));
 
     render_input_field(
-        frame, chunks[2],
+        frame,
+        chunks[2],
         "OS Name",
-        if os_name.is_empty() { "e.g., My Custom Linux" } else { os_name },
+        if os_name.is_empty() {
+            "e.g., My Custom Linux"
+        } else {
+            os_name
+        },
         os_name.is_empty(),
         name_focus,
         name_editing,
@@ -154,9 +464,14 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
     let pub_editing = matches!(state.editing_field, Some(WizardField::CustomOsPublisher));
 
     render_input_field(
-        frame, chunks[3],
+        frame,
+        chunks[3],
         "Publisher",
-        if publisher.is_empty() { "e.g., Open Source Community" } else { publisher },
+        if publisher.is_empty() {
+            "e.g., Open Source Community"
+        } else {
+            publisher
+        },
         publisher.is_empty(),
         pub_focus,
         pub_editing,
@@ -169,10 +484,13 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
     }
 
     // Architecture selection (cycle)
-    let arch = custom_os.map(|c| c.architecture.as_str()).unwrap_or("x86_64");
+    let arch = custom_os
+        .map(|c| c.architecture.as_str())
+        .unwrap_or("x86_64");
     let arch_focus = state.field_focus == 2;
     render_select_field(
-        frame, chunks[4],
+        frame,
+        chunks[4],
         "Architecture",
         arch,
         arch_focus,
@@ -180,7 +498,9 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
     );
 
     // Base profile selection
-    let base_profile = custom_os.map(|c| c.base_profile.as_str()).unwrap_or("generic-other");
+    let base_profile = custom_os
+        .map(|c| c.base_profile.as_str())
+        .unwrap_or("generic-other");
     let base_focus = state.field_focus == 3;
 
     let base_block = Block::default()
@@ -199,11 +519,24 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
     let mut base_lines = Vec::new();
     base_lines.push(Line::from(vec![
         Span::styled("Profile: ", Style::default().fg(Color::Yellow)),
-        Span::styled(base_display, if base_focus { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) }),
+        Span::styled(
+            base_display,
+            if base_focus {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            },
+        ),
     ]));
     base_lines.push(Line::from(Span::styled(
-        if base_focus { "[←/→] Change profile" } else { "" },
-        Style::default().fg(Color::DarkGray),
+        if base_focus {
+            "[←/→] Change profile"
+        } else {
+            ""
+        },
+        Style::default().fg(Color::Gray),
     )));
 
     let base_text = Paragraph::new(base_lines);
@@ -213,22 +546,22 @@ pub fn render_custom_os(app: &App, frame: &mut Frame) {
     let tips_block = Block::default()
         .title(" Tip ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(Color::Gray));
 
     let tips_inner = tips_block.inner(chunks[8]);
     frame.render_widget(tips_block, chunks[8]);
 
     let tips_text = Paragraph::new(
         "You can adjust QEMU settings in step 4.\n\
-         Consider contributing new OS profiles to the project!"
+         Consider contributing new OS profiles to the project!",
     )
-    .style(Style::default().fg(Color::DarkGray))
+    .style(Style::default().fg(Color::Gray))
     .wrap(Wrap { trim: false });
     frame.render_widget(tips_text, tips_inner);
 
     // Help
     let help = Paragraph::new("[Tab] Next field  [Enter] Continue  [Esc] Cancel")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[9]);
 }
@@ -259,9 +592,11 @@ fn render_input_field(
     frame.render_widget(block, area);
 
     let text_style = if is_placeholder {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     } else if is_editing {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
@@ -292,17 +627,20 @@ fn render_select_field(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut spans = vec![
-        Span::styled(value, if is_focused {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+    let mut spans = vec![Span::styled(
+        value,
+        if is_focused {
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
-        }),
-    ];
+        },
+    )];
 
     if is_focused {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(hint, Style::default().fg(Color::Gray)));
     }
 
     let text = Paragraph::new(Line::from(spans));
@@ -345,18 +683,23 @@ pub fn render_download(app: &App, frame: &mut Frame) {
         .title(" Downloading ISO ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
 
-    let progress = app.wizard_state.as_ref()
+    let progress = app
+        .wizard_state
+        .as_ref()
         .map(|s| s.iso_download_progress)
         .unwrap_or(0.0);
 
-    let text = Paragraph::new(format!("Downloading... {:.0}%\n\n[Esc] Cancel", progress * 100.0))
-        .style(Style::default().fg(Color::White))
-        .alignment(Alignment::Center);
+    let text = Paragraph::new(format!(
+        "Downloading... {:.0}%\n\n[Esc] Cancel",
+        progress * 100.0
+    ))
+    .style(Style::default().fg(Color::White))
+    .alignment(Alignment::Center);
     frame.render_widget(text, inner);
 }
 
@@ -378,7 +721,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
 /// Handle key input for custom OS form
 pub fn handle_custom_os_key(app: &mut App, key: KeyEvent) -> Result<()> {
-    let editing = app.wizard_state.as_ref()
+    let editing = app
+        .wizard_state
+        .as_ref()
         .map(|s| s.editing_field.is_some())
         .unwrap_or(false);
 
@@ -409,8 +754,12 @@ pub fn handle_custom_os_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 if let Some(ref mut state) = app.wizard_state {
                     if let Some(ref mut custom) = state.custom_os {
                         match state.editing_field {
-                            Some(WizardField::CustomOsName) => { custom.name.pop(); }
-                            Some(WizardField::CustomOsPublisher) => { custom.publisher.pop(); }
+                            Some(WizardField::CustomOsName) => {
+                                custom.name.pop();
+                            }
+                            Some(WizardField::CustomOsPublisher) => {
+                                custom.publisher.pop();
+                            }
                             _ => {}
                         }
                     }
@@ -435,30 +784,42 @@ pub fn handle_custom_os_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             KeyCode::BackTab | KeyCode::Char('k') | KeyCode::Up => {
                 if let Some(ref mut state) = app.wizard_state {
-                    state.field_focus = if state.field_focus == 0 { 3 } else { state.field_focus - 1 };
+                    state.field_focus = if state.field_focus == 0 {
+                        3
+                    } else {
+                        state.field_focus - 1
+                    };
                 }
             }
             KeyCode::Left | KeyCode::Right => {
-                let delta = if key.code == KeyCode::Right { 1i32 } else { -1i32 };
+                let delta = if key.code == KeyCode::Right {
+                    1i32
+                } else {
+                    -1i32
+                };
                 if let Some(ref mut state) = app.wizard_state {
                     if let Some(ref mut custom) = state.custom_os {
                         match state.field_focus {
                             2 => {
                                 // Architecture
-                                let current_idx = ARCH_OPTIONS.iter()
+                                let current_idx = ARCH_OPTIONS
+                                    .iter()
                                     .position(|&a| a == custom.architecture)
                                     .unwrap_or(0);
                                 let new_idx = (current_idx as i32 + delta)
-                                    .rem_euclid(ARCH_OPTIONS.len() as i32) as usize;
+                                    .rem_euclid(ARCH_OPTIONS.len() as i32)
+                                    as usize;
                                 custom.architecture = ARCH_OPTIONS[new_idx].to_string();
                             }
                             3 => {
                                 // Base profile
-                                let current_idx = BASE_PROFILE_OPTIONS.iter()
+                                let current_idx = BASE_PROFILE_OPTIONS
+                                    .iter()
                                     .position(|&p| p == custom.base_profile)
                                     .unwrap_or(0);
                                 let new_idx = (current_idx as i32 + delta)
-                                    .rem_euclid(BASE_PROFILE_OPTIONS.len() as i32) as usize;
+                                    .rem_euclid(BASE_PROFILE_OPTIONS.len() as i32)
+                                    as usize;
                                 custom.base_profile = BASE_PROFILE_OPTIONS[new_idx].to_string();
                             }
                             _ => {}
@@ -478,7 +839,9 @@ pub fn handle_custom_os_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             KeyCode::Enter => {
                 // Validate and continue
-                let valid = app.wizard_state.as_ref()
+                let valid = app
+                    .wizard_state
+                    .as_ref()
                     .and_then(|s| s.custom_os.as_ref())
                     .map(|c| !c.name.trim().is_empty())
                     .unwrap_or(false);
@@ -513,7 +876,8 @@ pub fn handle_custom_os_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         }
 
                         // Generate ID from name
-                        let id = custom_name.to_lowercase()
+                        let id = custom_name
+                            .to_lowercase()
                             .chars()
                             .map(|c| if c.is_alphanumeric() { c } else { '-' })
                             .collect::<String>()
@@ -559,10 +923,14 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
     let state = app.wizard_state.as_ref().unwrap();
 
     let block = Block::default()
-        .title(format!(" Create New VM ({}/5) - {} ", state.step.number(), state.step.title()))
+        .title(format!(
+            " Create New VM ({}/5) - {} ",
+            state.step.number(),
+            state.step.title()
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -572,22 +940,56 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1),   // OS list header
-            Constraint::Min(10),     // OS list
-            Constraint::Length(1),   // Spacer
-            Constraint::Length(3),   // VM Name field
-            Constraint::Length(1),   // Error message
-            Constraint::Length(2),   // Help text
+            Constraint::Length(3), // Current summary
+            Constraint::Length(1), // OS list header
+            Constraint::Length(3), // Filter field
+            Constraint::Length(1), // Spacer
+            Constraint::Min(8),    // OS list
+            Constraint::Length(1), // Spacer
+            Constraint::Length(3), // VM Name field
+            Constraint::Length(1), // Error message
+            Constraint::Length(2), // Help text
         ])
         .split(inner);
 
+    render_wizard_summary(app, frame, chunks[0]);
+
     // OS list header
-    let header = Paragraph::new("Select Operating System:")
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-    frame.render_widget(header, chunks[0]);
+    let header = Paragraph::new("Select Operating System:").style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(header, chunks[1]);
+
+    let filter_editing = matches!(state.editing_field, Some(WizardField::OsFilter));
+    let filter_border = if filter_editing {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let filter_style = if filter_editing {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let filter_block = Block::default()
+        .title(" OS Filter (/ or Tab) ")
+        .borders(Borders::ALL)
+        .border_style(filter_border);
+    let filter_text = if state.os_filter.is_empty() {
+        Paragraph::new("Type to fuzzy-filter OS entries by name, id, or summary")
+            .style(Style::default().fg(Color::Gray))
+            .block(filter_block)
+    } else {
+        Paragraph::new(state.os_filter.as_str())
+            .style(filter_style)
+            .block(filter_block)
+    };
+    frame.render_widget(filter_text, chunks[2]);
 
     // OS list (grouped by category)
-    render_os_list(app, frame, chunks[1]);
+    render_os_list(app, frame, chunks[4]);
 
     // VM Name input (below OS list)
     let name_editing = matches!(state.editing_field, Some(WizardField::VmName));
@@ -609,39 +1011,44 @@ fn render_step_select_os(app: &App, frame: &mut Frame, area: Rect) {
 
     let name_text = if state.vm_name.is_empty() {
         Paragraph::new("Select an OS above...")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(Color::Gray))
             .block(name_block)
     } else {
         Paragraph::new(state.vm_name.as_str())
             .style(name_style)
             .block(name_block)
     };
-    frame.render_widget(name_text, chunks[3]);
+    frame.render_widget(name_text, chunks[6]);
 
     // Set cursor position when editing
     if name_editing {
-        let cursor_x = chunks[3].x + 1 + state.vm_name.len() as u16;
-        let cursor_y = chunks[3].y + 1;
+        let cursor_x = chunks[6].x + 1 + state.vm_name.len() as u16;
+        let cursor_y = chunks[6].y + 1;
+        frame.set_cursor_position((cursor_x, cursor_y));
+    } else if filter_editing {
+        let cursor_x = chunks[2].x + 1 + state.os_filter.len() as u16;
+        let cursor_y = chunks[2].y + 1;
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 
     // Error message
     if let Some(ref error) = state.error_message {
-        let error_text = Paragraph::new(error.as_str())
-            .style(Style::default().fg(Color::Red));
-        frame.render_widget(error_text, chunks[4]);
+        let error_text = Paragraph::new(error.as_str()).style(Style::default().fg(Color::Red));
+        frame.render_widget(error_text, chunks[7]);
     }
 
     // Help text
-    let help_text = if name_editing {
-        "[Enter] Done editing  [Esc] Cancel"
+    let help_text = if filter_editing {
+        "[Enter] Done editing  [Esc] Clear/exit  [Tab] Next field"
+    } else if name_editing {
+        "[Enter] Done editing  [Esc] Cancel  [Tab] Back to list"
     } else {
-        "[j/k] Select OS  [Tab] Edit name  [Enter] Next  [Esc] Cancel"
+        "[j/k] Select OS  [/] Filter  [Tab] Cycle fields  [Enter] Next  [Esc] Cancel"
     };
     let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[5]);
+    frame.render_widget(help, chunks[8]);
 }
 
 fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
@@ -654,55 +1061,54 @@ fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Build the list of items (categories and OSes)
+    let items = build_os_list_items(app, state);
     let mut lines: Vec<Line> = Vec::new();
-    let mut item_index = 0;
+    for (item_index, item) in items.iter().enumerate() {
+        match item {
+            OsListItem::Category {
+                display_name,
+                has_matches,
+                match_count,
+                expanded,
+                ..
+            } => {
+                let is_selected = item_index == state.os_list_selected;
+                let expand_icon = if *expanded { "v" } else { ">" };
+                let category_style = if is_selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else if !has_matches && !state.os_filter.is_empty() {
+                    Style::default().fg(Color::Gray)
+                } else {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                };
+                let prefix = if is_selected { "> " } else { "  " };
 
-    // Get categories in display order
-    let category_order = ["windows", "linux", "bsd", "unix", "macos", "mobile", "infrastructure", "utilities", "alternative", "retro", "classic-mac"];
-
-    for category in &category_order {
-        let profiles = app.qemu_profiles.list_by_category(category);
-        if profiles.is_empty() {
-            continue;
-        }
-
-        let is_expanded = state.is_category_expanded(category);
-        let is_selected = item_index == state.os_list_selected;
-
-        // Category header
-        let expand_icon = if is_expanded { "v" } else { ">" };
-        let category_name = QemuProfileStore::category_display_name(category);
-        let category_style = if is_selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-        };
-
-        let prefix = if is_selected { "> " } else { "  " };
-        lines.push(Line::from(vec![
-            Span::styled(prefix, category_style),
-            Span::styled(expand_icon, category_style),
-            Span::styled(format!(" {}", category_name), category_style),
-        ]));
-
-        item_index += 1;
-
-        // OS items (if expanded)
-        if is_expanded {
-            for (os_id, profile) in &profiles {
-                // Filter by search query
+                let mut spans = vec![
+                    Span::styled(prefix, category_style),
+                    Span::styled(expand_icon, category_style),
+                    Span::styled(format!(" {}", display_name), category_style),
+                ];
                 if !state.os_filter.is_empty() {
-                    let filter_lower = state.os_filter.to_lowercase();
-                    if !profile.display_name.to_lowercase().contains(&filter_lower)
-                        && !os_id.to_lowercase().contains(&filter_lower)
-                    {
-                        continue;
-                    }
+                    let count_style = if *has_matches {
+                        Style::default().fg(Color::Gray)
+                    } else {
+                        Style::default().fg(Color::Red)
+                    };
+                    spans.push(Span::styled(format!("  [{}]", match_count), count_style));
                 }
-
+                lines.push(Line::from(spans));
+            }
+            OsListItem::Os {
+                os_id,
+                display_name,
+                summary,
+            } => {
                 let is_os_selected = item_index == state.os_list_selected;
-                let is_chosen = state.selected_os.as_ref() == Some(*os_id);
+                let is_chosen = state.selected_os.as_ref() == Some(os_id);
 
                 let os_style = if is_os_selected {
                     Style::default().fg(Color::Yellow)
@@ -714,33 +1120,29 @@ fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
 
                 let prefix = if is_os_selected { "> " } else { "  " };
                 let chosen_marker = if is_chosen { "*" } else { " " };
-                let summary = profile.summary();
-
                 lines.push(Line::from(vec![
                     Span::styled(prefix, os_style),
                     Span::styled(format!("   {}", chosen_marker), os_style),
-                    Span::styled(profile.display_name.to_string(), os_style),
-                    Span::styled(format!("  ({})", summary), Style::default().fg(Color::DarkGray)),
+                    Span::styled(display_name.to_string(), os_style),
+                    Span::styled(format!("  ({})", summary), Style::default().fg(Color::Gray)),
                 ]));
-
-                item_index += 1;
+            }
+            OsListItem::Custom => {
+                let is_custom_selected = item_index == state.os_list_selected;
+                let custom_style = if is_custom_selected {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::Magenta)
+                };
+                let prefix = if is_custom_selected { "> " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, custom_style),
+                    Span::styled("   Custom OS...", custom_style),
+                    Span::styled("  (Define your own)", Style::default().fg(Color::Gray)),
+                ]));
             }
         }
     }
-
-    // Add "Custom OS" option at the end
-    let is_custom_selected = item_index == state.os_list_selected;
-    let custom_style = if is_custom_selected {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::Magenta)
-    };
-    let prefix = if is_custom_selected { "> " } else { "  " };
-    lines.push(Line::from(vec![
-        Span::styled(prefix, custom_style),
-        Span::styled("   Custom OS...", custom_style),
-        Span::styled("  (Define your own)", Style::default().fg(Color::DarkGray)),
-    ]));
 
     // Calculate scroll offset
     let visible_height = inner.height as usize;
@@ -762,27 +1164,74 @@ fn render_os_list(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn handle_step_select_os(app: &mut App, key: KeyEvent) -> Result<()> {
-    let editing_name = app.wizard_state.as_ref()
-        .map(|s| matches!(s.editing_field, Some(WizardField::VmName)))
-        .unwrap_or(false);
+    let editing_field = app
+        .wizard_state
+        .as_ref()
+        .and_then(|s| s.editing_field.clone());
 
-    if editing_name {
-        // Text input mode for VM name
+    if let Some(field) = editing_field {
         match key.code {
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Tab => {
+            KeyCode::Esc => {
+                if let Some(ref mut state) = app.wizard_state {
+                    match field {
+                        WizardField::OsFilter if !state.os_filter.is_empty() => {
+                            state.os_filter.clear();
+                        }
+                        WizardField::VmName => {
+                            state.editing_field = None;
+                            state.update_folder_name(&app.config.vm_library_path);
+                        }
+                        _ => {
+                            state.editing_field = None;
+                        }
+                    }
+                }
+                if matches!(field, WizardField::OsFilter) {
+                    sync_os_filter_selection(app, true);
+                }
+            }
+            KeyCode::Enter => {
                 if let Some(ref mut state) = app.wizard_state {
                     state.editing_field = None;
-                    state.update_folder_name(&app.config.vm_library_path);
+                    if matches!(field, WizardField::VmName) {
+                        state.update_folder_name(&app.config.vm_library_path);
+                    }
                 }
+            }
+            KeyCode::Tab => {
+                cycle_select_os_focus(app, false);
+            }
+            KeyCode::BackTab => {
+                cycle_select_os_focus(app, true);
             }
             KeyCode::Char(c) => {
                 if let Some(ref mut state) = app.wizard_state {
-                    state.vm_name.push(c);
+                    match field {
+                        WizardField::VmName => state.vm_name.push(c),
+                        WizardField::OsFilter => {
+                            state.os_filter.push(c);
+                        }
+                        _ => {}
+                    }
+                }
+                if matches!(field, WizardField::OsFilter) {
+                    sync_os_filter_selection(app, true);
                 }
             }
             KeyCode::Backspace => {
                 if let Some(ref mut state) = app.wizard_state {
-                    state.vm_name.pop();
+                    match field {
+                        WizardField::VmName => {
+                            state.vm_name.pop();
+                        }
+                        WizardField::OsFilter => {
+                            state.os_filter.pop();
+                        }
+                        _ => {}
+                    }
+                }
+                if matches!(field, WizardField::OsFilter) {
+                    sync_os_filter_selection(app, true);
                 }
             }
             _ => {}
@@ -793,11 +1242,16 @@ fn handle_step_select_os(app: &mut App, key: KeyEvent) -> Result<()> {
             KeyCode::Esc => {
                 app.cancel_wizard();
             }
-            KeyCode::Tab => {
-                // Toggle to name editing
+            KeyCode::Char('/') => {
                 if let Some(ref mut state) = app.wizard_state {
-                    state.editing_field = Some(WizardField::VmName);
+                    state.editing_field = Some(WizardField::OsFilter);
                 }
+            }
+            KeyCode::Tab => {
+                cycle_select_os_focus(app, false);
+            }
+            KeyCode::BackTab => {
+                cycle_select_os_focus(app, true);
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 // Count total items first (immutable borrow)
@@ -833,92 +1287,20 @@ fn handle_step_select_os(app: &mut App, key: KeyEvent) -> Result<()> {
 /// Count total items in the OS list (categories + visible OSes + custom)
 fn count_os_list_items(app: &App) -> usize {
     let state = app.wizard_state.as_ref().unwrap();
-    let category_order = ["windows", "linux", "bsd", "unix", "macos", "mobile", "infrastructure", "utilities", "alternative", "retro", "classic-mac"];
-
-    let mut count = 0;
-    for category in &category_order {
-        let profiles = app.qemu_profiles.list_by_category(category);
-        if profiles.is_empty() {
-            continue;
-        }
-        count += 1; // Category header
-        if state.is_category_expanded(category) {
-            // Count visible profiles (with filter)
-            for (os_id, profile) in &profiles {
-                if !state.os_filter.is_empty() {
-                    let filter_lower = state.os_filter.to_lowercase();
-                    if !profile.display_name.to_lowercase().contains(&filter_lower)
-                        && !os_id.to_lowercase().contains(&filter_lower)
-                    {
-                        continue;
-                    }
-                }
-                count += 1;
-            }
-        }
-    }
-    count += 1; // Custom OS option
-    count
+    build_os_list_items(app, state).len()
 }
 
 /// Handle action on OS list item (space to toggle, enter to select and proceed)
 fn handle_os_list_action(app: &mut App, proceed: bool) {
-    // First, collect all the information we need without holding borrows
     let Some(ref state) = app.wizard_state else {
         return;
     };
-    let selected = state.os_list_selected;
-    let os_filter = state.os_filter.clone();
-    let expanded_categories: Vec<String> = state.expanded_categories.clone();
-
-    let category_order = ["windows", "linux", "bsd", "unix", "macos", "mobile", "infrastructure", "utilities", "alternative", "retro", "classic-mac"];
-
-    let mut item_index = 0;
-    let mut action: Option<OsListAction> = None;
-
-    for category in &category_order {
-        let profiles = app.qemu_profiles.list_by_category(category);
-        if profiles.is_empty() {
-            continue;
-        }
-
-        // Category header
-        if item_index == selected {
-            action = Some(OsListAction::ToggleCategory(category.to_string()));
-            break;
-        }
-        item_index += 1;
-
-        // OS items (if expanded)
-        let is_expanded = expanded_categories.iter().any(|c| c == *category);
-        if is_expanded {
-            for (os_id, profile) in &profiles {
-                if !os_filter.is_empty() {
-                    let filter_lower = os_filter.to_lowercase();
-                    if !profile.display_name.to_lowercase().contains(&filter_lower)
-                        && !os_id.to_lowercase().contains(&filter_lower)
-                    {
-                        continue;
-                    }
-                }
-
-                if item_index == selected {
-                    action = Some(OsListAction::SelectOs(os_id.to_string()));
-                    break;
-                }
-                item_index += 1;
-            }
-        }
-
-        if action.is_some() {
-            break;
-        }
-    }
-
-    // Check if custom OS was selected (at the end)
-    if action.is_none() && item_index == selected {
-        action = Some(OsListAction::CustomOs);
-    }
+    let items = build_os_list_items(app, state);
+    let action = items.get(state.os_list_selected).map(|item| match item {
+        OsListItem::Category { category, .. } => OsListAction::ToggleCategory(category.clone()),
+        OsListItem::Os { os_id, .. } => OsListAction::SelectOs(os_id.clone()),
+        OsListItem::Custom => OsListAction::CustomOs,
+    });
 
     // Now execute the action
     match action {
@@ -926,6 +1308,7 @@ fn handle_os_list_action(app: &mut App, proceed: bool) {
             if let Some(ref mut state) = app.wizard_state {
                 state.toggle_category(&cat);
             }
+            sync_os_filter_selection(app, false);
         }
         Some(OsListAction::SelectOs(os_id)) => {
             app.wizard_select_os(&os_id);
@@ -951,6 +1334,41 @@ enum OsListAction {
     CustomOs,
 }
 
+fn cycle_select_os_focus(app: &mut App, reverse: bool) {
+    if let Some(ref mut state) = app.wizard_state {
+        state.editing_field = match (reverse, state.editing_field.clone()) {
+            (false, None) => Some(WizardField::OsFilter),
+            (false, Some(WizardField::OsFilter)) => Some(WizardField::VmName),
+            (false, Some(WizardField::VmName)) => None,
+            (true, None) => Some(WizardField::VmName),
+            (true, Some(WizardField::VmName)) => Some(WizardField::OsFilter),
+            (true, Some(WizardField::OsFilter)) => None,
+            (_, other) => other,
+        };
+
+        if state.editing_field.is_none() {
+            state.update_folder_name(&app.config.vm_library_path);
+        }
+    }
+}
+
+fn sync_os_filter_selection(app: &mut App, prefer_first_match: bool) {
+    let (item_count, first_match) = match app.wizard_state.as_ref() {
+        Some(state) => {
+            let items = build_os_list_items(app, state);
+            (items.len(), first_matching_os_index(&items))
+        }
+        None => return,
+    };
+
+    if let Some(ref mut state) = app.wizard_state {
+        if prefer_first_match {
+            state.os_list_selected = first_match.unwrap_or(0);
+        }
+        clamp_os_list_selection(state, item_count);
+    }
+}
+
 // =============================================================================
 // Step 2: Select ISO
 // =============================================================================
@@ -959,10 +1377,14 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
     let state = app.wizard_state.as_ref().unwrap();
 
     let block = Block::default()
-        .title(format!(" Create New VM ({}/5) - {} ", state.step.number(), state.step.title()))
+        .title(format!(
+            " Create New VM ({}/5) - {} ",
+            state.step.number(),
+            state.step.title()
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -971,41 +1393,55 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(2),   // OS info
-            Constraint::Length(1),   // Spacer
-            Constraint::Length(1),   // Header
-            Constraint::Min(10),     // Options
-            Constraint::Length(1),   // Selected path
-            Constraint::Length(2),   // Help
+            Constraint::Length(3), // Current summary
+            Constraint::Length(2), // OS info
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Header
+            Constraint::Min(10),   // Options
+            Constraint::Length(1), // Selected path
+            Constraint::Length(2), // Help
         ])
         .split(inner);
 
+    render_wizard_summary(app, frame, chunks[0]);
+
     // OS info
-    let os_name = state.selected_os.as_ref()
+    let os_name = state
+        .selected_os
+        .as_ref()
         .and_then(|id| app.qemu_profiles.get(id))
         .map(|p| p.display_name.as_str())
         .unwrap_or("Custom OS");
 
     let os_info = Paragraph::new(format!("Operating System: {}", os_name))
         .style(Style::default().fg(Color::White));
-    frame.render_widget(os_info, chunks[0]);
+    frame.render_widget(os_info, chunks[1]);
 
     // Header
-    let header = Paragraph::new("Install Media:")
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-    frame.render_widget(header, chunks[2]);
+    let header = Paragraph::new("Install Media:").style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(header, chunks[3]);
 
     // Options
     let mut lines = Vec::new();
     let mut option_idx = 0;
 
     // BIOS/ROM option first (if the selected profile has bios_rom config)
-    let bios_rom_config = state.selected_os.as_ref()
+    let bios_rom_config = state
+        .selected_os
+        .as_ref()
         .and_then(|id| app.qemu_profiles.get(id))
         .and_then(|p| p.bios_rom.as_ref());
 
     if let Some(bios_config) = bios_rom_config {
-        let req_label = if bios_config.required { " (REQUIRED)" } else { " (optional)" };
+        let req_label = if bios_config.required {
+            " (REQUIRED)"
+        } else {
+            " (optional)"
+        };
         let is_rom_selected = state.field_focus == option_idx;
         let rom_style = if is_rom_selected {
             Style::default().fg(Color::Yellow)
@@ -1014,12 +1450,18 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
         };
         let rom_prefix = if is_rom_selected { "> " } else { "  " };
         lines.push(Line::styled(
-            format!("{}( ) Browse for {} file...{}", rom_prefix, bios_config.label, req_label),
+            format!(
+                "{}( ) Browse for {} file...{}",
+                rom_prefix, bios_config.label, req_label
+            ),
             rom_style,
         ));
 
         if let Some(ref hint) = bios_config.hint {
-            lines.push(Line::styled(format!("       {}", hint), Style::default().fg(Color::DarkGray)));
+            lines.push(Line::styled(
+                format!("       {}", hint),
+                Style::default().fg(Color::Gray),
+            ));
         }
 
         if let Some(ref rom_path) = state.bios_rom_path {
@@ -1034,7 +1476,9 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     // Check if this OS has a free ISO URL
-    let has_download = state.selected_os.as_ref()
+    let has_download = state
+        .selected_os
+        .as_ref()
         .and_then(|id| app.qemu_profiles.get(id))
         .and_then(|p| p.iso_url.as_ref())
         .is_some();
@@ -1047,7 +1491,10 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
             Style::default().fg(Color::White)
         };
         let prefix = if is_selected { "> " } else { "  " };
-        lines.push(Line::styled(format!("{}( ) Open download page in browser", prefix), style));
+        lines.push(Line::styled(
+            format!("{}( ) Open download page in browser", prefix),
+            style,
+        ));
         option_idx += 1;
     }
 
@@ -1059,7 +1506,10 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
         Style::default().fg(Color::White)
     };
     let floppy_prefix = if is_floppy_selected { "> " } else { "  " };
-    lines.push(Line::styled(format!("{}( ) Browse for boot floppy image...", floppy_prefix), floppy_style));
+    lines.push(Line::styled(
+        format!("{}( ) Browse for boot floppy image...", floppy_prefix),
+        floppy_style,
+    ));
     if let Some(ref floppy_path) = state.floppy_path {
         lines.push(Line::styled(
             format!("       Floppy: {}", floppy_path.display()),
@@ -1075,7 +1525,10 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
         Style::default().fg(Color::White)
     };
     let browse_prefix = if is_browse_selected { "> " } else { "  " };
-    lines.push(Line::styled(format!("{}( ) Browse for local ISO file...", browse_prefix), browse_style));
+    lines.push(Line::styled(
+        format!("{}( ) Browse for local ISO file...", browse_prefix),
+        browse_style,
+    ));
     option_idx += 1;
 
     let is_recovery_selected = state.field_focus == option_idx;
@@ -1085,7 +1538,10 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
         Style::default().fg(Color::White)
     };
     let recovery_prefix = if is_recovery_selected { "> " } else { "  " };
-    lines.push(Line::styled(format!("{}( ) Browse for recovery image (DMG)...", recovery_prefix), recovery_style));
+    lines.push(Line::styled(
+        format!("{}( ) Browse for recovery image (DMG)...", recovery_prefix),
+        recovery_style,
+    ));
     option_idx += 1;
 
     let is_none_selected = state.field_focus == option_idx;
@@ -1095,35 +1551,45 @@ fn render_step_select_iso(app: &App, frame: &mut Frame, area: Rect) {
         Style::default().fg(Color::White)
     };
     let none_prefix = if is_none_selected { "> " } else { "  " };
-    lines.push(Line::styled(format!("{}( ) Skip (configure later)", none_prefix), none_style));
+    lines.push(Line::styled(
+        format!("{}( ) Skip (configure later)", none_prefix),
+        none_style,
+    ));
 
-    let options = Paragraph::new(lines)
-        .wrap(Wrap { trim: false });
-    frame.render_widget(options, chunks[3]);
+    let options = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(options, chunks[4]);
 
     // Selected path
     if let Some(ref path) = state.iso_path {
-        let label = if state.is_recovery_image { "Selected recovery image" } else { "Selected ISO" };
+        let label = if state.is_recovery_image {
+            "Selected recovery image"
+        } else {
+            "Selected ISO"
+        };
         let path_text = Paragraph::new(format!("{}: {}", label, path.display()))
             .style(Style::default().fg(Color::Green));
-        frame.render_widget(path_text, chunks[4]);
+        frame.render_widget(path_text, chunks[5]);
     }
 
     // Help
     let help = Paragraph::new("[j/k] Select  [Enter] Choose  [Esc] Back")
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[5]);
+    frame.render_widget(help, chunks[6]);
 }
 
 fn handle_step_select_iso(app: &mut App, key: KeyEvent) -> Result<()> {
-    let has_download = app.wizard_state.as_ref()
+    let has_download = app
+        .wizard_state
+        .as_ref()
         .and_then(|s| s.selected_os.as_ref())
         .and_then(|id| app.qemu_profiles.get(id))
         .and_then(|p| p.iso_url.as_ref())
         .is_some();
 
-    let has_bios_rom = app.wizard_state.as_ref()
+    let has_bios_rom = app
+        .wizard_state
+        .as_ref()
         .and_then(|s| s.selected_os.as_ref())
         .and_then(|id| app.qemu_profiles.get(id))
         .and_then(|p| p.bios_rom.as_ref())
@@ -1131,12 +1597,28 @@ fn handle_step_select_iso(app: &mut App, key: KeyEvent) -> Result<()> {
 
     // Compute option indices matching the render order: ROM, download, floppy, browse, recovery, skip
     let mut idx = 0;
-    let rom_idx = if has_bios_rom { let i = idx; idx += 1; Some(i) } else { None };
-    let download_idx = if has_download { let i = idx; idx += 1; Some(i) } else { None };
-    let floppy_idx = idx; idx += 1;
-    let browse_idx = idx; idx += 1;
-    let recovery_browse_idx = idx; idx += 1;
-    let no_iso_idx = idx; idx += 1;
+    let rom_idx = if has_bios_rom {
+        let i = idx;
+        idx += 1;
+        Some(i)
+    } else {
+        None
+    };
+    let download_idx = if has_download {
+        let i = idx;
+        idx += 1;
+        Some(i)
+    } else {
+        None
+    };
+    let floppy_idx = idx;
+    idx += 1;
+    let browse_idx = idx;
+    idx += 1;
+    let recovery_browse_idx = idx;
+    idx += 1;
+    let no_iso_idx = idx;
+    idx += 1;
     let max_options = idx;
 
     match key.code {
@@ -1158,7 +1640,11 @@ fn handle_step_select_iso(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            let focus = app.wizard_state.as_ref().map(|s| s.field_focus).unwrap_or(0);
+            let focus = app
+                .wizard_state
+                .as_ref()
+                .map(|s| s.field_focus)
+                .unwrap_or(0);
 
             if Some(focus) == rom_idx {
                 // Browse for ROM/BIOS file
@@ -1166,7 +1652,9 @@ fn handle_step_select_iso(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.push_screen(crate::app::Screen::FileBrowser);
             } else if Some(focus) == download_idx {
                 // Open download page in browser
-                if let Some(url) = app.wizard_state.as_ref()
+                if let Some(url) = app
+                    .wizard_state
+                    .as_ref()
                     .and_then(|s| s.selected_os.as_ref())
                     .and_then(|id| app.qemu_profiles.get(id))
                     .and_then(|p| p.iso_url.as_ref())
@@ -1192,13 +1680,17 @@ fn handle_step_select_iso(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.push_screen(crate::app::Screen::FileBrowser);
             } else if focus == no_iso_idx {
                 // Skip - check if ROM is required but missing
-                let rom_required_but_missing = app.wizard_state.as_ref()
+                let rom_required_but_missing = app
+                    .wizard_state
+                    .as_ref()
                     .and_then(|s| s.selected_os.as_ref())
                     .and_then(|id| app.qemu_profiles.get(id))
                     .and_then(|p| p.bios_rom.as_ref())
                     .map(|b| b.required)
                     .unwrap_or(false)
-                    && app.wizard_state.as_ref()
+                    && app
+                        .wizard_state
+                        .as_ref()
                         .map(|s| s.bios_rom_path.is_none())
                         .unwrap_or(false);
 
@@ -1211,6 +1703,7 @@ fn handle_step_select_iso(app: &mut App, key: KeyEvent) -> Result<()> {
                 if let Some(ref mut state) = app.wizard_state {
                     state.iso_path = None;
                     state.is_recovery_image = false;
+                    state.sync_auto_launch_default();
                 }
                 let _ = app.wizard_next_step();
             }
@@ -1228,10 +1721,14 @@ fn render_step_configure_disk(app: &App, frame: &mut Frame, area: Rect) {
     let state = app.wizard_state.as_ref().unwrap();
 
     let block = Block::default()
-        .title(format!(" Create New VM ({}/5) - {} ", state.step.number(), state.step.title()))
+        .title(format!(
+            " Create New VM ({}/5) - {} ",
+            state.step.number(),
+            state.step.title()
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1240,36 +1737,53 @@ fn render_step_configure_disk(app: &App, frame: &mut Frame, area: Rect) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1),   // Header
-            Constraint::Length(1),   // Spacer
-            Constraint::Length(1),   // Disk source toggle
-            Constraint::Length(1),   // Spacer
-            Constraint::Min(10),     // Mode-specific content
-            Constraint::Length(2),   // Help
+            Constraint::Length(3), // Current summary
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Disk source toggle
+            Constraint::Length(1), // Spacer
+            Constraint::Min(10),   // Mode-specific content
+            Constraint::Length(2), // Help
         ])
         .split(inner);
 
+    render_wizard_summary(app, frame, chunks[0]);
+
     // Header
-    let header = Paragraph::new("Disk Configuration")
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-    frame.render_widget(header, chunks[0]);
+    let header = Paragraph::new("Disk Configuration").style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(header, chunks[1]);
 
     // Disk source toggle (field_focus == 0)
     let source_focused = state.field_focus == 0;
     let create_style = if !state.use_existing_disk {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     };
     let existing_style = if state.use_existing_disk {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     };
     let prefix = if source_focused { "> " } else { "  " };
 
     let source_line = Line::from(vec![
-        Span::styled(prefix, if source_focused { Style::default().fg(Color::Yellow) } else { Style::default() }),
+        Span::styled(
+            prefix,
+            if source_focused {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            },
+        ),
         Span::styled("Disk Source: ", Style::default().fg(Color::Yellow)),
         Span::styled("[ ", Style::default()),
         Span::styled("Create New", create_style),
@@ -1277,16 +1791,16 @@ fn render_step_configure_disk(app: &App, frame: &mut Frame, area: Rect) {
         Span::styled("Use Existing", existing_style),
         Span::styled(" ]", Style::default()),
         if source_focused {
-            Span::styled("  [←/→] toggle", Style::default().fg(Color::DarkGray))
+            Span::styled("  [←/→] toggle", Style::default().fg(Color::Gray))
         } else {
             Span::raw("")
         },
     ]);
     let source_toggle = Paragraph::new(source_line);
-    frame.render_widget(source_toggle, chunks[2]);
+    frame.render_widget(source_toggle, chunks[3]);
 
     // Mode-specific content area
-    let content_area = chunks[4];
+    let content_area = chunks[5];
 
     if state.use_existing_disk {
         // "Use Existing" mode
@@ -1316,9 +1830,9 @@ fn render_step_configure_disk(app: &App, frame: &mut Frame, area: Rect) {
         }
     };
     let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[5]);
+    frame.render_widget(help, chunks[6]);
 }
 
 /// Render the "Create New" disk mode content
@@ -1328,9 +1842,9 @@ fn render_new_disk_mode(app: &App, frame: &mut Frame, area: Rect) {
     let sub_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),   // Disk size input
-            Constraint::Length(1),   // Spacer
-            Constraint::Min(5),      // Disk info
+            Constraint::Length(3), // Disk size input
+            Constraint::Length(1), // Spacer
+            Constraint::Min(5),    // Disk info
         ])
         .split(area);
 
@@ -1340,7 +1854,9 @@ fn render_new_disk_mode(app: &App, frame: &mut Frame, area: Rect) {
     let size_style = if editing {
         Style::default().fg(Color::Yellow)
     } else if size_focused {
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
@@ -1350,7 +1866,8 @@ fn render_new_disk_mode(app: &App, frame: &mut Frame, area: Rect) {
         Style::default().fg(Color::Gray)
     };
 
-    let recommended = app.wizard_selected_profile()
+    let recommended = app
+        .wizard_selected_profile()
         .map(|p| p.disk_size_gb)
         .unwrap_or(32);
 
@@ -1361,7 +1878,10 @@ fn render_new_disk_mode(app: &App, frame: &mut Frame, area: Rect) {
 
     // Show edit buffer when editing, otherwise show current value
     let size_display = if editing {
-        format!("{}|  (e.g., 500, 500GB, 512000MB)", state.wizard_edit_buffer)
+        format!(
+            "{}|  (e.g., 500, 500GB, 512000MB)",
+            state.wizard_edit_buffer
+        )
     } else {
         format!("{} GB", state.disk_size_gb)
     };
@@ -1377,7 +1897,8 @@ fn render_new_disk_mode(app: &App, frame: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Gray));
 
-    let disk_path = app.wizard_vm_path()
+    let disk_path = app
+        .wizard_vm_path()
         .map(|p| p.join(format!("{}.qcow2", state.folder_name)))
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "~/vm-space/<vm-name>/<vm-name>.qcow2".to_string());
@@ -1412,11 +1933,11 @@ fn render_existing_disk_mode(app: &App, frame: &mut Frame, area: Rect) {
     let sub_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),   // Browse / selected path
-            Constraint::Length(1),   // Spacer
-            Constraint::Length(1),   // Action toggle
-            Constraint::Length(1),   // Spacer
-            Constraint::Min(3),      // Note
+            Constraint::Length(3), // Browse / selected path
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Action toggle
+            Constraint::Length(1), // Spacer
+            Constraint::Min(3),    // Note
         ])
         .split(area);
 
@@ -1448,31 +1969,43 @@ fn render_existing_disk_mode(app: &App, frame: &mut Frame, area: Rect) {
         Paragraph::new(display).style(Style::default().fg(Color::Green))
     } else {
         let prefix = if browse_focused { "> " } else { "  " };
-        Paragraph::new(format!("{}( ) Browse for qcow2 disk file...", prefix))
-            .style(if browse_focused {
+        Paragraph::new(format!("{}( ) Browse for qcow2 disk file...", prefix)).style(
+            if browse_focused {
                 Style::default().fg(Color::Yellow)
             } else {
                 Style::default().fg(Color::White)
-            })
+            },
+        )
     };
     frame.render_widget(browse_text, browse_inner);
 
     // Action toggle (field_focus == 2)
     let action_focused = state.field_focus == 2;
     let copy_style = if matches!(state.existing_disk_action, DiskAction::Copy) {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     };
     let move_style = if matches!(state.existing_disk_action, DiskAction::Move) {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Gray)
     };
     let prefix = if action_focused { "> " } else { "  " };
 
     let action_line = Line::from(vec![
-        Span::styled(prefix, if action_focused { Style::default().fg(Color::Yellow) } else { Style::default() }),
+        Span::styled(
+            prefix,
+            if action_focused {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            },
+        ),
         Span::styled("Action: ", Style::default().fg(Color::Yellow)),
         Span::styled("[ ", Style::default()),
         Span::styled("Copy to VM folder", copy_style),
@@ -1488,20 +2021,23 @@ fn render_existing_disk_mode(app: &App, frame: &mut Frame, area: Rect) {
         "Note: The disk will be renamed to {}.qcow2",
         state.folder_name
     );
-    let note = Paragraph::new(note_text)
-        .style(Style::default().fg(Color::DarkGray));
+    let note = Paragraph::new(note_text).style(Style::default().fg(Color::Gray));
     frame.render_widget(note, sub_chunks[4]);
 }
 
 fn handle_step_configure_disk(app: &mut App, key: KeyEvent) -> Result<()> {
     use crate::app::{DiskAction, FileBrowserMode};
 
-    let (editing, use_existing, field_focus) = app.wizard_state.as_ref()
-        .map(|s| (
-            matches!(s.editing_field, Some(WizardField::DiskSize)),
-            s.use_existing_disk,
-            s.field_focus,
-        ))
+    let (editing, use_existing, field_focus) = app
+        .wizard_state
+        .as_ref()
+        .map(|s| {
+            (
+                matches!(s.editing_field, Some(WizardField::DiskSize)),
+                s.use_existing_disk,
+                s.field_focus,
+            )
+        })
         .unwrap_or((false, false, 0));
 
     // Handle disk size editing mode (only in "Create New" mode)
@@ -1578,6 +2114,7 @@ fn handle_step_configure_disk(app: &mut App, key: KeyEvent) -> Result<()> {
                     0 => {
                         // Toggle disk source mode
                         state.use_existing_disk = !state.use_existing_disk;
+                        state.sync_auto_launch_default();
                     }
                     1 if !state.use_existing_disk => {
                         // Adjust disk size (Create New mode)
@@ -1694,27 +2231,42 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
     let state = app.wizard_state.as_ref().unwrap();
 
     let block = Block::default()
-        .title(format!(" Create New VM ({}/5) - {} ", state.step.number(), state.step.title()))
+        .title(format!(
+            " Create New VM ({}/5) - {} ",
+            state.step.number(),
+            state.step.title()
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    let outer_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3), // Current summary
+            Constraint::Min(10),   // Main content
+        ])
+        .split(inner);
+
+    render_wizard_summary(app, frame, outer_chunks[0]);
 
     // Split into left (settings) and right (notes) panels
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(inner);
+        .split(outer_chunks[1]);
 
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1),   // Header
-            Constraint::Min(18),     // Settings
-            Constraint::Length(2),   // Help
+            Constraint::Length(1), // Header
+            Constraint::Min(18),   // Settings
+            Constraint::Length(2), // Help
         ])
         .split(h_chunks[0]);
 
@@ -1722,14 +2274,17 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1),   // Header
-            Constraint::Min(18),     // Notes
+            Constraint::Length(1), // Header
+            Constraint::Min(18),   // Notes
         ])
         .split(h_chunks[1]);
 
     // Left side: Settings header
-    let header = Paragraph::new("QEMU Settings")
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    let header = Paragraph::new("QEMU Settings").style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
     frame.render_widget(header, left_chunks[0]);
 
     // Settings list (editable)
@@ -1821,7 +2376,10 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
         let backend_display = match config.network_backend.as_str() {
             "user" => "user/SLIRP (NAT)".to_string(),
             "passt" => "passt".to_string(),
-            "bridge" => format!("bridge ({})", config.bridge_name.as_deref().unwrap_or("qemubr0")),
+            "bridge" => format!(
+                "bridge ({})",
+                config.bridge_name.as_deref().unwrap_or("qemubr0")
+            ),
             "none" => "none".to_string(),
             other => other.to_string(),
         };
@@ -1885,15 +2443,26 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
     ));
 
     lines.push(Line::from(""));
-    lines.push(Line::styled("  Features (toggle with Space):", Style::default().fg(Color::DarkGray)));
+    lines.push(Line::styled(
+        "  Features (toggle with Space):",
+        Style::default().fg(Color::Gray),
+    ));
 
     // KVM toggle
     let kvm_selected = focus == 10;
-    lines.push(render_toggle_line("KVM Accel:", config.enable_kvm, kvm_selected));
+    lines.push(render_toggle_line(
+        "KVM Accel:",
+        config.enable_kvm,
+        kvm_selected,
+    ));
 
     // 3D/GL acceleration toggle
     let gl_selected = focus == 11;
-    lines.push(render_toggle_line("3D Accel:", config.gl_acceleration, gl_selected));
+    lines.push(render_toggle_line(
+        "3D Accel:",
+        config.gl_acceleration,
+        gl_selected,
+    ));
 
     // UEFI toggle
     let uefi_selected = focus == 12;
@@ -1905,11 +2474,19 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
 
     // USB Tablet toggle
     let usb_selected = focus == 14;
-    lines.push(render_toggle_line("USB Tablet:", config.usb_tablet, usb_selected));
+    lines.push(render_toggle_line(
+        "USB Tablet:",
+        config.usb_tablet,
+        usb_selected,
+    ));
 
     // RTC Local toggle
     let rtc_selected = focus == 15;
-    lines.push(render_toggle_line("RTC Local:", config.rtc_localtime, rtc_selected));
+    lines.push(render_toggle_line(
+        "RTC Local:",
+        config.rtc_localtime,
+        rtc_selected,
+    ));
 
     let settings = Paragraph::new(lines);
     frame.render_widget(settings, left_chunks[1]);
@@ -1921,19 +2498,22 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
         "[j/k] Navigate  [Tab] Edit  [←/→] Change  [Space] Toggle  [Enter] Next"
     };
     let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     frame.render_widget(help, left_chunks[2]);
 
     // Right side: Notes header
-    let notes_header = Paragraph::new("Why These Defaults?")
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    let notes_header = Paragraph::new("Why These Defaults?").style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
     frame.render_widget(notes_header, right_chunks[0]);
 
     // Right side: Explanation notes
     let notes_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(Color::Gray));
 
     let notes_inner = notes_block.inner(right_chunks[1]);
     frame.render_widget(notes_block, right_chunks[1]);
@@ -1944,25 +2524,53 @@ fn render_step_configure_qemu(app: &App, frame: &mut Frame, area: Rect) {
         .style(Style::default().fg(Color::Gray))
         .wrap(Wrap { trim: false });
     frame.render_widget(notes, notes_inner);
+
+    if app.wizard_editing_port_forwards {
+        render_wizard_port_forward_editor(app, frame, centered_rect(56, 14, area));
+    }
 }
 
-fn render_field_line(label: &str, value: &str, selected: bool, editing: bool, hint: &str) -> Line<'static> {
+fn render_field_line(
+    label: &str,
+    value: &str,
+    selected: bool,
+    editing: bool,
+    hint: &str,
+) -> Line<'static> {
     let prefix = if selected { "> " } else { "  " };
     let label_style = Style::default().fg(Color::Yellow);
     let value_style = if editing {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else if selected {
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
-    let hint_style = Style::default().fg(Color::DarkGray);
+    let hint_style = Style::default().fg(Color::Gray);
 
     Line::from(vec![
-        Span::styled(prefix.to_string(), if selected { Style::default().fg(Color::Yellow) } else { Style::default() }),
+        Span::styled(
+            prefix.to_string(),
+            if selected {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            },
+        ),
         Span::styled(format!("{:12}", label), label_style),
         Span::styled(format!("{:15}", value), value_style),
-        Span::styled(if selected { hint.to_string() } else { String::new() }, hint_style),
+        Span::styled(
+            if selected {
+                hint.to_string()
+            } else {
+                String::new()
+            },
+            hint_style,
+        ),
     ])
 }
 
@@ -1971,13 +2579,26 @@ fn render_toggle_line(label: &str, enabled: bool, selected: bool) -> Line<'stati
     let checkbox = if enabled { "[x]" } else { "[ ]" };
     let label_style = Style::default().fg(Color::Yellow);
     let value_style = if selected {
-        Style::default().fg(if enabled { Color::Green } else { Color::Red }).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(if enabled { Color::Green } else { Color::Red })
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(if enabled { Color::Green } else { Color::DarkGray })
+        Style::default().fg(if enabled {
+            Color::Green
+        } else {
+            Color::DarkGray
+        })
     };
 
     Line::from(vec![
-        Span::styled(prefix.to_string(), if selected { Style::default().fg(Color::Yellow) } else { Style::default() }),
+        Span::styled(
+            prefix.to_string(),
+            if selected {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            },
+        ),
         Span::styled(format!("{:12}", label), label_style),
         Span::styled(checkbox.to_string(), value_style),
     ])
@@ -1999,8 +2620,13 @@ fn get_audio_label(audio: &[String]) -> &'static str {
 
 fn get_field_notes(app: &App, focus: usize) -> String {
     let profile = app.wizard_selected_profile();
-    let profile_notes = profile.and_then(|p| p.notes.as_ref()).cloned().unwrap_or_default();
-    let os_name = profile.map(|p| p.display_name.as_str()).unwrap_or("this OS");
+    let profile_notes = profile
+        .and_then(|p| p.notes.as_ref())
+        .cloned()
+        .unwrap_or_default();
+    let os_name = profile
+        .map(|p| p.display_name.as_str())
+        .unwrap_or("this OS");
 
     let field = QemuField::from_index(focus);
 
@@ -2057,21 +2683,41 @@ fn get_field_notes(app: &App, focus: usize) -> String {
             os_name
         ),
         QemuField::BridgeName => {
-            let bridges = &app.network_caps.system_bridges;
+            let bridges = &app.network_caps.allowed_bridges;
             let bridges_str = if bridges.is_empty() {
-                "No bridges detected on system.".to_string()
+                "No bridge-helper-allowed bridges detected on system.".to_string()
             } else {
-                format!("Available: {}", bridges.join(", "))
+                format!("Allowed: {}", bridges.join(", "))
+            };
+            let lab_bridges = lab_friendly_bridges(bridges);
+            let selected_bridge = app
+                .wizard_state
+                .as_ref()
+                .and_then(|s| s.qemu_config.bridge_name.as_deref())
+                .unwrap_or("qemubr0");
+            let bridge_class = classify_bridge(selected_bridge);
+            let exposure_note = if is_lab_friendly_bridge(selected_bridge) {
+                "This looks like a private libvirt bridge and is usually the safer choice for isolated labs."
+            } else {
+                "This looks like a host/LAN bridge. Guests attached here may be directly reachable from the connected network."
+            };
+            let lab_str = if lab_bridges.is_empty() {
+                "No private/libvirt-style bridges detected in the allowed set.".to_string()
+            } else {
+                format!("Lab-friendly bridges: {}", lab_bridges.join(", "))
             };
             format!(
                 "Network bridge for {}.\n\n\
                 {}\n\n\
+                Selected: {} ({})\n\
+                {}\n\n\
+                {}\n\n\
                 The VM will get its own IP on the bridge network, \
                 providing full LAN access.\n\n\
-                Requires qemu-bridge-helper with proper permissions.",
-                os_name, bridges_str
+                Requires qemu-bridge-helper permissions and an allow rule in /etc/qemu/bridge.conf.",
+                os_name, bridges_str, selected_bridge, bridge_class, exposure_note, lab_str
             )
-        },
+        }
         QemuField::PortForwards => format!(
             "Port forwarding for {}.\n\n\
             Forward host ports to the VM for \
@@ -2100,12 +2746,14 @@ fn get_field_notes(app: &App, focus: usize) -> String {
         QemuField::Kvm => "KVM hardware acceleration.\n\n\
             Enables near-native speed using CPU virtualization.\n\n\
             Requires: Linux host with Intel VT-x or AMD-V.\n\
-            Disable for: Non-x86 guests, nested virt issues.".to_string(),
+            Disable for: Non-x86 guests, nested virt issues."
+            .to_string(),
         QemuField::GlAccel => "3D/OpenGL acceleration.\n\n\
             Hardware-accelerated 3D graphics via virtio-gpu.\n\n\
             Requires: virtio VGA (auto-set when enabled)\n\
             Best for: Linux guests, Android x86\n\
-            Not for: Windows (no virtio 3D), retro OSes".to_string(),
+            Not for: Windows (no virtio 3D), retro OSes"
+            .to_string(),
         QemuField::Uefi => format!(
             "UEFI boot mode for {}.\n\n\
             Modern boot firmware (vs legacy BIOS).\n\n\
@@ -2118,15 +2766,18 @@ fn get_field_notes(app: &App, focus: usize) -> String {
             Trusted Platform Module for security features.\n\n\
             Required: Windows 11\n\
             Optional: BitLocker, Secure Boot\n\
-            Not needed: Most other OSes".to_string(),
+            Not needed: Most other OSes"
+            .to_string(),
         QemuField::UsbTablet => "USB tablet device.\n\n\
             Provides seamless mouse integration (no capture).\n\n\
             Recommended: Most modern systems\n\
-            Disable: Old OSes with USB issues".to_string(),
+            Disable: Old OSes with USB issues"
+            .to_string(),
         QemuField::RtcLocal => "RTC in local time.\n\n\
             Sets hardware clock to local timezone.\n\n\
             Enable: Windows (expects local time)\n\
-            Disable: Linux/Unix (expects UTC)".to_string(),
+            Disable: Linux/Unix (expects UTC)"
+            .to_string(),
     };
 
     if profile_notes.is_empty() {
@@ -2145,10 +2796,14 @@ fn handle_step_configure_qemu(app: &mut App, key: KeyEvent) -> Result<()> {
     }
 
     // Check if we're in edit mode for Memory or CPU
-    let editing_memory = app.wizard_state.as_ref()
+    let editing_memory = app
+        .wizard_state
+        .as_ref()
         .map(|s| matches!(s.editing_field, Some(WizardField::MemoryMb)))
         .unwrap_or(false);
-    let editing_cpu = app.wizard_state.as_ref()
+    let editing_cpu = app
+        .wizard_state
+        .as_ref()
         .map(|s| matches!(s.editing_field, Some(WizardField::CpuCores)))
         .unwrap_or(false);
 
@@ -2193,7 +2848,11 @@ fn handle_step_configure_qemu(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             KeyCode::Left | KeyCode::Right => {
                 // Allow arrow keys to still adjust while editing
-                let delta = if key.code == KeyCode::Right { 1i32 } else { -1i32 };
+                let delta = if key.code == KeyCode::Right {
+                    1i32
+                } else {
+                    -1i32
+                };
                 handle_qemu_field_change(app, delta);
                 // Update buffer to reflect new value
                 if let Some(ref mut state) = app.wizard_state {
@@ -2215,7 +2874,9 @@ fn handle_step_configure_qemu(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Enter => {
             // Check if on PortForwards field
-            let on_pf = app.wizard_state.as_ref()
+            let on_pf = app
+                .wizard_state
+                .as_ref()
                 .map(|s| QemuField::from_index(s.field_focus) == QemuField::PortForwards)
                 .unwrap_or(false);
             if on_pf {
@@ -2258,14 +2919,20 @@ fn handle_step_configure_qemu(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Left | KeyCode::Right => {
-            let delta = if key.code == KeyCode::Right { 1i32 } else { -1i32 };
+            let delta = if key.code == KeyCode::Right {
+                1i32
+            } else {
+                -1i32
+            };
             handle_qemu_field_change(app, delta);
             // Show warning if spice-app selected without viewer
             if let Some(ref state) = app.wizard_state {
                 if state.qemu_config.display.contains("spice")
                     && !crate::commands::qemu_system::is_spice_viewer_available()
                 {
-                    app.set_status("Warning: spice-app requires virt-viewer/remote-viewer to be installed");
+                    app.set_status(
+                        "Warning: spice-app requires virt-viewer/remote-viewer to be installed",
+                    );
                 }
             }
         }
@@ -2290,8 +2957,12 @@ fn handle_step_configure_qemu(app: &mut App, key: KeyEvent) -> Result<()> {
                     }
                     QemuField::Uefi => state.qemu_config.uefi = !state.qemu_config.uefi,
                     QemuField::Tpm => state.qemu_config.tpm = !state.qemu_config.tpm,
-                    QemuField::UsbTablet => state.qemu_config.usb_tablet = !state.qemu_config.usb_tablet,
-                    QemuField::RtcLocal => state.qemu_config.rtc_localtime = !state.qemu_config.rtc_localtime,
+                    QemuField::UsbTablet => {
+                        state.qemu_config.usb_tablet = !state.qemu_config.usb_tablet
+                    }
+                    QemuField::RtcLocal => {
+                        state.qemu_config.rtc_localtime = !state.qemu_config.rtc_localtime
+                    }
                     _ => {}
                 }
             }
@@ -2319,34 +2990,32 @@ fn handle_wizard_port_forward_editor(app: &mut App, key: KeyEvent) -> Result<()>
             KeyCode::Esc => {
                 app.wizard_adding_pf = None;
             }
-            KeyCode::Enter => {
-                match adding.step {
-                    AddPfStep::Protocol => {
-                        adding.step = AddPfStep::HostPort;
-                    }
-                    AddPfStep::HostPort => {
-                        if adding.host_port_input.parse::<u16>().is_ok() {
-                            adding.step = AddPfStep::GuestPort;
-                        }
-                    }
-                    AddPfStep::GuestPort => {
-                        if let (Ok(host), Ok(guest)) = (
-                            adding.host_port_input.parse::<u16>(),
-                            adding.guest_port_input.parse::<u16>(),
-                        ) {
-                            let pf = PortForward {
-                                protocol: adding.protocol,
-                                host_port: host,
-                                guest_port: guest,
-                            };
-                            if let Some(ref mut state) = app.wizard_state {
-                                state.qemu_config.port_forwards.push(pf);
-                            }
-                            app.wizard_adding_pf = None;
-                        }
+            KeyCode::Enter => match adding.step {
+                AddPfStep::Protocol => {
+                    adding.step = AddPfStep::HostPort;
+                }
+                AddPfStep::HostPort => {
+                    if adding.host_port_input.parse::<u16>().is_ok() {
+                        adding.step = AddPfStep::GuestPort;
                     }
                 }
-            }
+                AddPfStep::GuestPort => {
+                    if let (Ok(host), Ok(guest)) = (
+                        adding.host_port_input.parse::<u16>(),
+                        adding.guest_port_input.parse::<u16>(),
+                    ) {
+                        let pf = PortForward {
+                            protocol: adding.protocol,
+                            host_port: host,
+                            guest_port: guest,
+                        };
+                        if let Some(ref mut state) = app.wizard_state {
+                            state.qemu_config.port_forwards.push(pf);
+                        }
+                        app.wizard_adding_pf = None;
+                    }
+                }
+            },
             KeyCode::Left | KeyCode::Right => {
                 if adding.step == AddPfStep::Protocol {
                     adding.protocol = match adding.protocol {
@@ -2355,20 +3024,20 @@ fn handle_wizard_port_forward_editor(app: &mut App, key: KeyEvent) -> Result<()>
                     };
                 }
             }
-            KeyCode::Char(c) if c.is_ascii_digit() => {
-                match adding.step {
-                    AddPfStep::HostPort => adding.host_port_input.push(c),
-                    AddPfStep::GuestPort => adding.guest_port_input.push(c),
-                    _ => {}
+            KeyCode::Char(c) if c.is_ascii_digit() => match adding.step {
+                AddPfStep::HostPort => adding.host_port_input.push(c),
+                AddPfStep::GuestPort => adding.guest_port_input.push(c),
+                _ => {}
+            },
+            KeyCode::Backspace => match adding.step {
+                AddPfStep::HostPort => {
+                    adding.host_port_input.pop();
                 }
-            }
-            KeyCode::Backspace => {
-                match adding.step {
-                    AddPfStep::HostPort => { adding.host_port_input.pop(); }
-                    AddPfStep::GuestPort => { adding.guest_port_input.pop(); }
-                    _ => {}
+                AddPfStep::GuestPort => {
+                    adding.guest_port_input.pop();
                 }
-            }
+                _ => {}
+            },
             _ => {}
         }
         return Ok(());
@@ -2380,7 +3049,9 @@ fn handle_wizard_port_forward_editor(app: &mut App, key: KeyEvent) -> Result<()>
             app.wizard_editing_port_forwards = false;
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            let pf_len = app.wizard_state.as_ref()
+            let pf_len = app
+                .wizard_state
+                .as_ref()
                 .map(|s| s.qemu_config.port_forwards.len())
                 .unwrap_or(0);
             if app.wizard_pf_selected < pf_len.saturating_sub(1) {
@@ -2405,7 +3076,10 @@ fn handle_wizard_port_forward_editor(app: &mut App, key: KeyEvent) -> Result<()>
                 if !state.qemu_config.port_forwards.is_empty()
                     && app.wizard_pf_selected < state.qemu_config.port_forwards.len()
                 {
-                    state.qemu_config.port_forwards.remove(app.wizard_pf_selected);
+                    state
+                        .qemu_config
+                        .port_forwards
+                        .remove(app.wizard_pf_selected);
                     if app.wizard_pf_selected >= state.qemu_config.port_forwards.len()
                         && app.wizard_pf_selected > 0
                     {
@@ -2425,44 +3099,247 @@ fn handle_wizard_port_forward_editor(app: &mut App, key: KeyEvent) -> Result<()>
     Ok(())
 }
 
-fn add_wizard_preset(app: &mut App, protocol: crate::vm::qemu_config::PortProtocol, host_port: u16, guest_port: u16) {
+fn render_wizard_port_forward_editor(app: &App, frame: &mut Frame, area: Rect) {
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Port Forwarding ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(4),    // Rules / form
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Presets
+            Constraint::Length(2), // Help
+        ])
+        .split(inner);
+
+    if let Some(ref adding) = app.wizard_adding_pf {
+        render_wizard_adding_pf(adding, frame, area);
+        return;
+    }
+
+    let header = Paragraph::new("Port Forwarding Rules").style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(header, chunks[0]);
+
+    if let Some(state) = app.wizard_state.as_ref() {
+        if state.qemu_config.port_forwards.is_empty() {
+            let msg = Paragraph::new("  No port forwarding rules configured.")
+                .style(Style::default().fg(Color::Gray));
+            frame.render_widget(msg, chunks[2]);
+        } else {
+            let mut lines = Vec::new();
+            for (i, pf) in state.qemu_config.port_forwards.iter().enumerate() {
+                let is_selected = i == app.wizard_pf_selected;
+                let prefix = if is_selected { "> " } else { "  " };
+                let style = if is_selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                lines.push(Line::styled(
+                    format!(
+                        "{}{}  {} -> {}",
+                        prefix, pf.protocol, pf.host_port, pf.guest_port
+                    ),
+                    style,
+                ));
+            }
+            frame.render_widget(Paragraph::new(lines), chunks[2]);
+        }
+    }
+
+    let presets = Paragraph::new("  Presets: [1] SSH  [2] RDP  [3] HTTP  [4] HTTPS  [5] VNC")
+        .style(Style::default().fg(Color::Gray));
+    frame.render_widget(presets, chunks[4]);
+
+    let help = Paragraph::new("[a] Add  [d] Delete  [1-5] Preset  [Esc] Done")
+        .style(Style::default().fg(Color::Gray))
+        .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[5]);
+}
+
+fn render_wizard_adding_pf(adding: &crate::app::AddingPortForward, frame: &mut Frame, area: Rect) {
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Add Port Forward ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Protocol
+            Constraint::Length(1), // Host port
+            Constraint::Length(1), // Guest port
+            Constraint::Min(2),    // Spacer
+            Constraint::Length(2), // Help
+        ])
+        .split(inner);
+
+    let header = Paragraph::new("Add Port Forward Rule").style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(header, chunks[0]);
+
+    let proto_active = adding.step == crate::app::AddPfStep::Protocol;
+    let proto_style = if proto_active {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  Protocol: ", Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{}", adding.protocol), proto_style),
+            Span::styled(
+                if proto_active {
+                    " [Left/Right] toggle"
+                } else {
+                    ""
+                },
+                Style::default().fg(Color::Gray),
+            ),
+        ])),
+        chunks[2],
+    );
+
+    let host_active = adding.step == crate::app::AddPfStep::HostPort;
+    let host_style = if host_active {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  Host Port: ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                if adding.host_port_input.is_empty() {
+                    "_"
+                } else {
+                    &adding.host_port_input
+                },
+                host_style,
+            ),
+        ])),
+        chunks[3],
+    );
+
+    let guest_active = adding.step == crate::app::AddPfStep::GuestPort;
+    let guest_style = if guest_active {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  Guest Port: ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                if adding.guest_port_input.is_empty() {
+                    "_"
+                } else {
+                    &adding.guest_port_input
+                },
+                guest_style,
+            ),
+        ])),
+        chunks[4],
+    );
+
+    let help = Paragraph::new("[Enter] Next/Confirm  [Esc] Cancel")
+        .style(Style::default().fg(Color::Gray))
+        .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[6]);
+}
+
+fn add_wizard_preset(
+    app: &mut App,
+    protocol: crate::vm::qemu_config::PortProtocol,
+    host_port: u16,
+    guest_port: u16,
+) {
     if let Some(ref mut state) = app.wizard_state {
-        if !state.qemu_config.port_forwards.iter().any(|pf| pf.host_port == host_port && pf.guest_port == guest_port) {
-            state.qemu_config.port_forwards.push(crate::vm::qemu_config::PortForward {
-                protocol,
-                host_port,
-                guest_port,
-            });
+        if !state
+            .qemu_config
+            .port_forwards
+            .iter()
+            .any(|pf| pf.host_port == host_port && pf.guest_port == guest_port)
+        {
+            state
+                .qemu_config
+                .port_forwards
+                .push(crate::vm::qemu_config::PortForward {
+                    protocol,
+                    host_port,
+                    guest_port,
+                });
         }
     }
 }
 
 fn handle_qemu_field_change(app: &mut App, delta: i32) {
     // Get dynamic display options based on the current emulator
-    let emulator = app.wizard_state.as_ref()
+    let emulator = app
+        .wizard_state
+        .as_ref()
         .map(|s| s.qemu_config.emulator.clone())
         .unwrap_or_else(|| "qemu-system-x86_64".to_string());
     let dynamic_display_options = app.get_display_options_for_emulator(&emulator);
 
     // Collect network backend options before mutable borrow
-    let backend_options: Vec<String> = app.get_network_backend_options()
+    let backend_options: Vec<String> = app
+        .get_network_backend_options()
         .iter()
         .map(|(id, _)| id.to_string())
         .collect();
-    let system_bridges = app.network_caps.system_bridges.clone();
-    let default_bridge = system_bridges.first().cloned()
+    let system_bridges = app.network_caps.allowed_bridges.clone();
+    let default_bridge = system_bridges
+        .first()
+        .cloned()
         .or_else(|| Some("qemubr0".to_string()));
 
-    let Some(ref mut state) = app.wizard_state else { return };
+    let Some(ref mut state) = app.wizard_state else {
+        return;
+    };
     let field = QemuField::from_index(state.field_focus);
 
     match field {
         QemuField::Memory => {
             let change = 256 * delta;
-            state.qemu_config.memory_mb = (state.qemu_config.memory_mb as i32 + change).clamp(128, 1048576) as u32;
+            state.qemu_config.memory_mb =
+                (state.qemu_config.memory_mb as i32 + change).clamp(128, 1048576) as u32;
         }
         QemuField::CpuCores => {
-            state.qemu_config.cpu_cores = (state.qemu_config.cpu_cores as i32 + delta).clamp(1, 256) as u32;
+            state.qemu_config.cpu_cores =
+                (state.qemu_config.cpu_cores as i32 + delta).clamp(1, 256) as u32;
         }
         QemuField::Vga => {
             cycle_option(&mut state.qemu_config.vga, VGA_OPTIONS, delta);
@@ -2478,7 +3355,9 @@ fn handle_qemu_field_change(app: &mut App, delta: i32) {
             cycle_option(&mut state.qemu_config.network_backend, &backend_strs, delta);
 
             // Set default bridge name when switching to bridge
-            if state.qemu_config.network_backend == "bridge" && state.qemu_config.bridge_name.is_none() {
+            if state.qemu_config.network_backend == "bridge"
+                && state.qemu_config.bridge_name.is_none()
+            {
                 state.qemu_config.bridge_name = default_bridge.clone();
             }
         }
@@ -2486,11 +3365,12 @@ fn handle_qemu_field_change(app: &mut App, delta: i32) {
             // Cycle through available system bridges
             if !system_bridges.is_empty() {
                 let current_bridge = state.qemu_config.bridge_name.as_deref().unwrap_or("");
-                let current_idx = system_bridges.iter()
+                let current_idx = system_bridges
+                    .iter()
                     .position(|b| b == current_bridge)
                     .unwrap_or(0);
-                let new_idx = (current_idx as i32 + delta)
-                    .rem_euclid(system_bridges.len() as i32) as usize;
+                let new_idx =
+                    (current_idx as i32 + delta).rem_euclid(system_bridges.len() as i32) as usize;
                 state.qemu_config.bridge_name = Some(system_bridges[new_idx].clone());
             }
         }
@@ -2498,11 +3378,16 @@ fn handle_qemu_field_change(app: &mut App, delta: i32) {
             // Handled via Enter key, not left/right
         }
         QemuField::DiskInterface => {
-            cycle_option(&mut state.qemu_config.disk_interface, DISK_INTERFACE_OPTIONS, delta);
+            cycle_option(
+                &mut state.qemu_config.disk_interface,
+                DISK_INTERFACE_OPTIONS,
+                delta,
+            );
         }
         QemuField::Display => {
             // Use dynamic options from detected capabilities
-            let display_strs: Vec<&str> = dynamic_display_options.iter().map(|s| s.as_str()).collect();
+            let display_strs: Vec<&str> =
+                dynamic_display_options.iter().map(|s| s.as_str()).collect();
             if !display_strs.is_empty() {
                 cycle_option(&mut state.qemu_config.display, &display_strs, delta);
             } else {
@@ -2515,22 +3400,30 @@ fn handle_qemu_field_change(app: &mut App, delta: i32) {
 }
 
 fn cycle_option(current: &mut String, options: &[&str], delta: i32) {
-    let current_idx = options.iter().position(|&o| o == current.as_str()).unwrap_or(0);
+    let current_idx = options
+        .iter()
+        .position(|&o| o == current.as_str())
+        .unwrap_or(0);
     let new_idx = (current_idx as i32 + delta).rem_euclid(options.len() as i32) as usize;
     *current = options[new_idx].to_string();
 }
 
 fn cycle_audio(current: &mut Vec<String>, delta: i32) {
     // Find current audio preset
-    let current_idx = AUDIO_OPTIONS.iter().position(|(_, devices)| {
-        if devices.is_empty() && current.is_empty() {
-            true
-        } else if !devices.is_empty() && !current.is_empty() {
-            current.iter().any(|c| devices.iter().any(|d| c.contains(d)))
-        } else {
-            false
-        }
-    }).unwrap_or(0);
+    let current_idx = AUDIO_OPTIONS
+        .iter()
+        .position(|(_, devices)| {
+            if devices.is_empty() && current.is_empty() {
+                true
+            } else if !devices.is_empty() && !current.is_empty() {
+                current
+                    .iter()
+                    .any(|c| devices.iter().any(|d| c.contains(d)))
+            } else {
+                false
+            }
+        })
+        .unwrap_or(0);
 
     let new_idx = (current_idx as i32 + delta).rem_euclid(AUDIO_OPTIONS.len() as i32) as usize;
     let (_, devices) = AUDIO_OPTIONS[new_idx];
@@ -2545,10 +3438,14 @@ fn render_step_confirm(app: &App, frame: &mut Frame, area: Rect) {
     let state = app.wizard_state.as_ref().unwrap();
 
     let block = Block::default()
-        .title(format!(" Create New VM ({}/5) - {} ", state.step.number(), state.step.title()))
+        .title(format!(
+            " Create New VM ({}/5) - {} ",
+            state.step.number(),
+            state.step.title()
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(crate::ui::modal_background()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -2557,31 +3454,42 @@ fn render_step_confirm(app: &App, frame: &mut Frame, area: Rect) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1),   // Header
-            Constraint::Length(1),   // Spacer
-            Constraint::Min(15),     // Summary
-            Constraint::Length(3),   // Auto-launch toggle
-            Constraint::Length(1),   // Error
-            Constraint::Length(2),   // Help
+            Constraint::Length(3), // Current summary
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(15),   // Summary
+            Constraint::Length(3), // Auto-launch toggle
+            Constraint::Length(1), // Error
+            Constraint::Length(2), // Help
         ])
         .split(inner);
 
+    render_wizard_summary(app, frame, chunks[0]);
+
     // Header
-    let header = Paragraph::new("Summary")
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-    frame.render_widget(header, chunks[0]);
+    let header = Paragraph::new("Summary").style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(header, chunks[1]);
 
     // Summary
-    let os_name = state.selected_os.as_ref()
+    let os_name = state
+        .selected_os
+        .as_ref()
         .and_then(|id| app.qemu_profiles.get(id))
         .map(|p| p.display_name.as_str())
         .unwrap_or("Custom OS");
 
-    let vm_path = app.wizard_vm_path()
+    let vm_path = app
+        .wizard_vm_path()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    let iso_str = state.iso_path.as_ref()
+    let iso_str = state
+        .iso_path
+        .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "None".to_string());
 
@@ -2624,7 +3532,10 @@ fn render_step_confirm(app: &App, frame: &mut Frame, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("Hardware:       ", Style::default().fg(Color::Yellow)),
-        Span::raw(format!("{} cores, {} MB RAM", config.cpu_cores, config.memory_mb)),
+        Span::raw(format!(
+            "{} cores, {} MB RAM",
+            config.cpu_cores, config.memory_mb
+        )),
     ]));
     lines.push(Line::from(vec![
         Span::styled("Graphics:       ", Style::default().fg(Color::Yellow)),
@@ -2632,14 +3543,23 @@ fn render_step_confirm(app: &App, frame: &mut Frame, area: Rect) {
     ]));
     lines.push(Line::from(vec![
         Span::styled("Audio:          ", Style::default().fg(Color::Yellow)),
-        Span::raw(config.audio.first().cloned().unwrap_or_else(|| "None".to_string())),
+        Span::raw(
+            config
+                .audio
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "None".to_string()),
+        ),
     ]));
     let net_display = if config.network_model == "none" {
         "none".to_string()
     } else {
         let backend_str = match config.network_backend.as_str() {
             "passt" => "passt".to_string(),
-            "bridge" => format!("bridge ({})", config.bridge_name.as_deref().unwrap_or("qemubr0")),
+            "bridge" => format!(
+                "bridge ({})",
+                config.bridge_name.as_deref().unwrap_or("qemubr0")
+            ),
             "none" => "disabled".to_string(),
             _ => "user/SLIRP (NAT)".to_string(),
         };
@@ -2651,42 +3571,65 @@ fn render_step_confirm(app: &App, frame: &mut Frame, area: Rect) {
     ]));
     if !config.port_forwards.is_empty() {
         for pf in &config.port_forwards {
-            lines.push(Line::from(format!("                {} {} -> {}", pf.protocol, pf.host_port, pf.guest_port)));
+            lines.push(Line::from(format!(
+                "                {} {} -> {}",
+                pf.protocol, pf.host_port, pf.guest_port
+            )));
         }
     }
 
-    let accel = if config.enable_kvm { "KVM enabled" } else { "No acceleration" };
+    let accel = if config.enable_kvm {
+        "KVM enabled"
+    } else {
+        "No acceleration"
+    };
     lines.push(Line::from(vec![
         Span::styled("Acceleration:   ", Style::default().fg(Color::Yellow)),
         Span::raw(accel),
     ]));
 
-    let summary = Paragraph::new(lines)
-        .wrap(Wrap { trim: false });
-    frame.render_widget(summary, chunks[2]);
+    let summary = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(summary, chunks[3]);
 
     // Auto-launch toggle
+    let launch_selected = state.field_focus == 1;
     let launch_box = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Gray));
+        .border_style(if launch_selected {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Gray)
+        });
     let checkbox = if state.auto_launch { "[x]" } else { "[ ]" };
-    let launch_text = Paragraph::new(format!("{} Launch VM in install mode after creation", checkbox))
-        .style(Style::default().fg(Color::White))
-        .block(launch_box);
-    frame.render_widget(launch_text, chunks[3]);
+    let launch_prefix = if launch_selected { "> " } else { "  " };
+    let launch_text = Paragraph::new(format!(
+        "{}{} {}",
+        launch_prefix,
+        checkbox,
+        auto_launch_label(state)
+    ))
+    .style(if launch_selected {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    })
+    .block(launch_box);
+    frame.render_widget(launch_text, chunks[4]);
 
     // Error
     if let Some(ref error) = state.error_message {
-        let error_text = Paragraph::new(error.as_str())
-            .style(Style::default().fg(Color::Red));
-        frame.render_widget(error_text, chunks[4]);
+        let error_text = Paragraph::new(error.as_str()).style(Style::default().fg(Color::Red));
+        frame.render_widget(error_text, chunks[5]);
     }
 
     // Help
-    let help = Paragraph::new("[Enter] Create VM  [Space] Toggle launch  [Esc] Back")
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[5]);
+    let help =
+        Paragraph::new("[j/k] Navigate  [Enter] Select/Create  [Space] Toggle launch  [Esc] Back")
+            .style(Style::default().fg(Color::Gray))
+            .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[6]);
 }
 
 fn handle_step_confirm(app: &mut App, key: KeyEvent) -> Result<()> {
@@ -2694,84 +3637,66 @@ fn handle_step_confirm(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Esc => {
             app.wizard_prev_step();
         }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(ref mut state) = app.wizard_state {
+                if state.field_focus < 1 {
+                    state.field_focus += 1;
+                }
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(ref mut state) = app.wizard_state {
+                if state.field_focus > 0 {
+                    state.field_focus -= 1;
+                }
+            }
+        }
         KeyCode::Char(' ') => {
             if let Some(ref mut state) = app.wizard_state {
-                state.auto_launch = !state.auto_launch;
+                if state.field_focus == 1 {
+                    state.toggle_auto_launch();
+                }
             }
         }
         KeyCode::Enter => {
-            // Create the VM
-            let (library_path, auto_launch) = {
-                let state = app.wizard_state.as_ref().unwrap();
-                let path = app.config.vm_library_path.clone();
-                let launch = state.auto_launch;
-                (path, launch)
-            };
+            let launch_selected = app
+                .wizard_state
+                .as_ref()
+                .map(|s| s.field_focus == 1)
+                .unwrap_or(false);
+            if launch_selected {
+                if let Some(ref mut state) = app.wizard_state {
+                    state.toggle_auto_launch();
+                }
+                return Ok(());
+            }
 
-            // Clone the state for creation
+            let library_path = app.config.vm_library_path.clone();
             let state = app.wizard_state.as_ref().unwrap().clone();
             let vm_name = state.vm_name.clone();
+            let auto_launch = state.auto_launch;
+            let boot_mode = auto_launch_boot_mode(&state);
+            let tx = app.background_tx.clone();
 
-            match create_vm(&library_path, &state) {
-                Ok(created) => {
-                    // Cancel wizard first (closes screens)
-                    app.cancel_wizard();
+            app.start_loading(format!("Creating {}...", vm_name));
 
-                    // Refresh VM list to include the new VM
-                    match app.refresh_vms() {
-                        Ok(()) => {
-                            app.set_status(format!("VM created: {}", vm_name));
-                        }
-                        Err(e) => {
-                            app.set_status(format!("VM created but refresh failed: {}", e));
-                        }
-                    }
+            thread::spawn(move || {
+                let result = create_vm(&library_path, &state);
+                let (launch_script, error) = match result {
+                    Ok(created) => (Some(created.launch_script), None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
 
-                    // If auto_launch is enabled, find and launch the new VM
-                    if auto_launch {
-                        // Find the newly created VM and select it
-                        if let Some(idx) = app.vms.iter().position(|vm| {
-                            vm.launch_script == created.launch_script
-                        }) {
-                            // Find in visual order
-                            if let Some(visual_idx) = app.visual_order.iter().position(|&filtered_idx| {
-                                app.filtered_indices.get(filtered_idx) == Some(&idx)
-                            }) {
-                                app.selected_vm = visual_idx;
-
-                                // Set boot mode to install
-                                app.boot_mode = crate::vm::BootMode::Install;
-
-                                // Launch the VM
-                                match launch_created_vm(app) {
-                                    Ok(()) => {
-                                        app.set_status(format!("Launched: {}", vm_name));
-                                    }
-                                    Err(e) => {
-                                        app.set_status(format!("VM created but launch failed: {}", e));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    if let Some(ref mut state) = app.wizard_state {
-                        state.error_message = Some(format!("Failed to create VM: {}", e));
-                    }
-                }
-            }
+                let _ = tx.send(BackgroundResult::VmCreated {
+                    vm_name,
+                    launch_script,
+                    auto_launch,
+                    boot_mode,
+                    error,
+                });
+            });
         }
         _ => {}
-    }
-    Ok(())
-}
-
-/// Launch a newly created VM
-fn launch_created_vm(app: &mut App) -> Result<()> {
-    if let Some(vm) = app.selected_vm() {
-        let options = app.get_launch_options();
-        crate::vm::launch_vm_sync(vm, &options)?;
     }
     Ok(())
 }
@@ -2781,9 +3706,7 @@ fn open_url_in_browser(url: &str) -> Result<()> {
     use std::process::Command;
 
     // Try xdg-open first (standard on Linux)
-    let result = Command::new("xdg-open")
-        .arg(url)
-        .spawn();
+    let result = Command::new("xdg-open").arg(url).spawn();
 
     match result {
         Ok(_) => Ok(()),

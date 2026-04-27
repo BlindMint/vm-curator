@@ -1,5 +1,24 @@
 # Changelog
 
+All notable changes to this fork are documented here. Upstream release history is preserved below.
+
+## Unreleased (Fork)
+
+### Fixed
+- Fixed `launch.sh` corruption when updating VM networking after creation, which could break `case` branches and produce shell syntax errors.
+- Fixed bridge readiness checks to respect `/etc/qemu/bridge.conf` allow rules instead of only detecting bridge-helper availability.
+- Fixed create-wizard step 4 input freezes caused by hidden port-forward editor state.
+- Fixed create-wizard step 5 blocking behavior by moving VM creation into the existing background worker path.
+- Fixed imported/existing-disk auto-launch behavior so those workflows no longer default to installer boot mode when no install media is present.
+
+### Changed
+- Rebranded the fork as **VM Foundry** while keeping upstream config and metadata paths for compatibility.
+- Kept footer shortcut hints visible and moved transient notifications into a shared non-intrusive overlay.
+- Added fuzzy OS filtering to the create wizard while keeping category structure visible.
+- Added a shared busy/progress overlay for long-running background operations.
+- Improved step 5 navigation so the auto-launch option is keyboard-focusable and follows the selected disk/media source more intelligently.
+- Improved create-wizard help-text contrast.
+
 **v0.4.7**
 - **Windows Server Profiles**: Add 9 Windows Server OS profiles spanning two decades of Microsoft's server platform
   - Versions: 2003, 2008, 2008 R2, 2012, 2012 R2, 2016, 2019, 2022, 2025
@@ -66,7 +85,7 @@
   - Compatibility warnings for unsupported features (macvtap, virtio-net bridges, SPICE displays)
 - **VM Notes**: Add free-form personal notes to any VM from the management menu
   - Multi-line text editor with full keyboard navigation
-  - Notes stored in per-VM `vm-curator.toml` and displayed in the main info panel below Fun Facts
+  - Notes stored in per-VM `vm-foundry.toml` and displayed in the main info panel below Fun Facts
   - Notes preserved across VM renames
 
 **v0.3.4**
@@ -141,7 +160,7 @@
 
 **v0.1.2**
 - **Binary Packages**: Pre-built packages now available for Linux (DEB, RPM, AppImage, tarball)
-- **crates.io**: Install via `cargo install vm-curator`
+- **crates.io**: Install via `cargo install vm-foundry`
 - **AUR**: Available for Arch & Arch-derived Linux users (incl. CachyOS, EndeavourOS, Garuda, and Omarchy)
 
 **v0.1.1**

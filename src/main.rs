@@ -22,10 +22,10 @@ use app::App;
 use config::Config;
 
 #[derive(Parser)]
-#[command(name = "vm-curator")]
+#[command(name = "vm-foundry")]
 #[command(author = "Mark Roboff")]
 #[command(version)]
-#[command(about = "A TUI application to manage your QEMU VM library")]
+#[command(about = "A TUI application to manage your desktop QEMU VM library")]
 struct Cli {
     /// Path to VM library directory
     #[arg(short, long)]
@@ -111,7 +111,11 @@ fn main() -> Result<()> {
     // Handle subcommands
     match cli.command {
         Some(Commands::List) => cmd_list(&config),
-        Some(Commands::Launch { name, install, cdrom }) => cmd_launch(&config, &name, install, cdrom),
+        Some(Commands::Launch {
+            name,
+            install,
+            cdrom,
+        }) => cmd_launch(&config, &name, install, cdrom),
         Some(Commands::Info { name }) => cmd_info(&config, &name),
         Some(Commands::Snapshot { name, action }) => cmd_snapshot(&config, &name, action),
         Some(Commands::Emulators) => cmd_emulators(),
@@ -123,7 +127,7 @@ fn main() -> Result<()> {
 fn prompt_vm_library_setup(mut config: Config) -> Result<Config> {
     println!();
     println!("\x1b[1;36m╭─────────────────────────────────────╮\x1b[0m");
-    println!("\x1b[1;36m│\x1b[0m    \x1b[1;33mVM Curator\x1b[0m - First Time Setup    \x1b[1;36m│\x1b[0m");
+    println!("\x1b[1;36m│\x1b[0m    \x1b[1;33mVM Foundry\x1b[0m - First Time Setup    \x1b[1;36m│\x1b[0m");
     println!("\x1b[1;36m╰─────────────────────────────────────╯\x1b[0m");
     println!();
     println!("VM library directory not found.");
@@ -170,8 +174,12 @@ fn prompt_vm_library_setup(mut config: Config) -> Result<Config> {
     print!("Creating directory {:?}... ", config.vm_library_path);
     io::stdout().flush()?;
 
-    let cow_disabled = fs::setup_vm_directory(&config.vm_library_path)
-        .with_context(|| format!("Failed to create VM library directory {:?}", config.vm_library_path))?;
+    let cow_disabled = fs::setup_vm_directory(&config.vm_library_path).with_context(|| {
+        format!(
+            "Failed to create VM library directory {:?}",
+            config.vm_library_path
+        )
+    })?;
 
     println!("\x1b[32m✓\x1b[0m");
 
@@ -198,11 +206,7 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         // Best effort restoration - ignore errors since we may be panicking
         let _ = disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        );
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
         let _ = crossterm::cursor::Show;
     }
 }
@@ -240,7 +244,7 @@ fn run_tui(config: Config) -> Result<()> {
 fn print_loading_header() {
     println!();
     println!("\x1b[1;36m╭─────────────────────────────────────╮\x1b[0m");
-    println!("\x1b[1;36m│\x1b[0m    \x1b[1;33mVM Curator\x1b[0m - QEMU VM Manager     \x1b[1;36m│\x1b[0m");
+    println!("\x1b[1;36m│\x1b[0m    \x1b[1;33mVM Foundry\x1b[0m - QEMU Lab Manager    \x1b[1;36m│\x1b[0m");
     println!("\x1b[1;36m╰─────────────────────────────────────╯\x1b[0m");
     println!();
 }
@@ -256,7 +260,10 @@ fn print_loading_progress(step: usize, total: usize, message: &str) {
     let percent = (step * 100) / total;
 
     print!("\r\x1b[K"); // Clear line
-    print!("\x1b[90m[\x1b[36m{}\x1b[90m]\x1b[0m {:>3}% {}", bar, percent, message);
+    print!(
+        "\x1b[90m[\x1b[36m{}\x1b[90m]\x1b[0m {:>3}% {}",
+        bar, percent, message
+    );
     let _ = io::stdout().flush();
 }
 
@@ -359,10 +366,7 @@ fn cmd_info(config: &Config, name: &str) -> Result<()> {
     println!();
     println!("Disks:");
     for disk in &vm.config.disks {
-        println!(
-            "  {:?} ({:?}, {})",
-            disk.path, disk.format, disk.interface
-        );
+        println!("  {:?} ({:?}, {})", disk.path, disk.format, disk.interface);
     }
 
     println!();

@@ -15,11 +15,11 @@ pub struct DiscoveredVm {
     pub launch_script: PathBuf,
     /// Parsed QEMU configuration
     pub config: QemuConfig,
-    /// Custom display name from vm-curator.toml (if set)
+    /// Custom display name from vm-foundry.toml (if set)
     pub custom_name: Option<String>,
-    /// OS profile ID from vm-curator.toml (if set)
+    /// OS profile ID from vm-foundry.toml (if set)
     pub os_profile: Option<String>,
-    /// User notes from vm-curator.toml (if set)
+    /// User notes from vm-foundry.toml (if set)
     pub notes: Option<String>,
 }
 
@@ -121,7 +121,8 @@ fn format_windows_name(id: &str) -> String {
 
 /// Format IBM OS/2 names
 fn format_os2_name(id: &str) -> String {
-    let version = id.strip_prefix("os2-")
+    let version = id
+        .strip_prefix("os2-")
         .or_else(|| id.strip_prefix("os-2-"))
         .unwrap_or(id);
 
@@ -177,10 +178,24 @@ fn format_linux_name(id: &str) -> String {
 
     // Rolling release distributions - check both full name and base (for duplicates)
     match distro {
-        "arch" | "artix" | "cachyos" | "endeavouros" | "endeavour" | "garuda" |
-        "gentoo" | "manjaro" | "nixos" | "void" | "bazzite" |
-        "opensuse-tumbleweed" | "suse-tumbleweed" | "tumbleweed" |
-        "pclinuxos" | "solus" | "puppy" | "clear" => {
+        "arch"
+        | "artix"
+        | "cachyos"
+        | "endeavouros"
+        | "endeavour"
+        | "garuda"
+        | "gentoo"
+        | "manjaro"
+        | "nixos"
+        | "void"
+        | "bazzite"
+        | "opensuse-tumbleweed"
+        | "suse-tumbleweed"
+        | "tumbleweed"
+        | "pclinuxos"
+        | "solus"
+        | "puppy"
+        | "clear" => {
             return format_rolling_distro(distro);
         }
         _ => {}
@@ -189,10 +204,24 @@ fn format_linux_name(id: &str) -> String {
     // Check if base_distro (without numeric suffix) matches a rolling distro
     if distro != base_distro {
         match base_distro {
-            "arch" | "artix" | "cachyos" | "endeavouros" | "endeavour" | "garuda" |
-            "gentoo" | "manjaro" | "nixos" | "void" | "bazzite" |
-            "opensuse-tumbleweed" | "suse-tumbleweed" | "tumbleweed" |
-            "pclinuxos" | "solus" | "puppy" | "clear" => {
+            "arch"
+            | "artix"
+            | "cachyos"
+            | "endeavouros"
+            | "endeavour"
+            | "garuda"
+            | "gentoo"
+            | "manjaro"
+            | "nixos"
+            | "void"
+            | "bazzite"
+            | "opensuse-tumbleweed"
+            | "suse-tumbleweed"
+            | "tumbleweed"
+            | "pclinuxos"
+            | "solus"
+            | "puppy"
+            | "clear" => {
                 return format_rolling_distro(base_distro);
             }
             _ => {}
@@ -216,7 +245,11 @@ fn format_linux_name(id: &str) -> String {
         return format_versioned_distro(distro, "centos", "CentOS Linux");
     }
     if distro.starts_with("rhel") || distro.starts_with("redhat") {
-        let prefix = if distro.starts_with("rhel") { "rhel" } else { "redhat" };
+        let prefix = if distro.starts_with("rhel") {
+            "rhel"
+        } else {
+            "redhat"
+        };
         return format_versioned_distro(distro, prefix, "Red Hat® Enterprise Linux");
     }
     if distro.starts_with("suse") || distro.starts_with("opensuse") {
@@ -229,7 +262,11 @@ fn format_linux_name(id: &str) -> String {
             return "openSUSE Tumbleweed (rolling)".to_string();
         }
         // Versioned SuSE = old SuSE Linux (e.g., SuSE Linux 7)
-        let prefix = if distro.starts_with("opensuse") { "opensuse" } else { "suse" };
+        let prefix = if distro.starts_with("opensuse") {
+            "opensuse"
+        } else {
+            "suse"
+        };
         return format_versioned_distro(distro, prefix, "SuSE Linux");
     }
     if distro.starts_with("slackware") {
@@ -242,7 +279,11 @@ fn format_linux_name(id: &str) -> String {
         return format_versioned_distro(distro, "elementary", "elementary OS");
     }
     if distro.starts_with("pop") || distro.starts_with("popos") {
-        let prefix = if distro.starts_with("popos") { "popos" } else { "pop" };
+        let prefix = if distro.starts_with("popos") {
+            "popos"
+        } else {
+            "pop"
+        };
         return format_versioned_distro(distro, prefix, "Pop!_OS");
     }
     if distro.starts_with("zorin") {
@@ -258,7 +299,11 @@ fn format_linux_name(id: &str) -> String {
         return format_versioned_distro(distro, "rocky", "Rocky Linux");
     }
     if distro.starts_with("alma") || distro.starts_with("almalinux") {
-        let prefix = if distro.starts_with("almalinux") { "almalinux" } else { "alma" };
+        let prefix = if distro.starts_with("almalinux") {
+            "almalinux"
+        } else {
+            "alma"
+        };
         return format_versioned_distro(distro, prefix, "AlmaLinux");
     }
     if distro.starts_with("mageia") {
@@ -280,7 +325,9 @@ fn format_rolling_distro(distro: &str) -> String {
         "gentoo" => "Gentoo Linux (rolling)".to_string(),
         "manjaro" => "Manjaro Linux (rolling)".to_string(),
         "nixos" => "NixOS (rolling)".to_string(),
-        "opensuse-tumbleweed" | "suse-tumbleweed" | "tumbleweed" => "openSUSE Tumbleweed (rolling)".to_string(),
+        "opensuse-tumbleweed" | "suse-tumbleweed" | "tumbleweed" => {
+            "openSUSE Tumbleweed (rolling)".to_string()
+        }
         "void" => "Void Linux (rolling)".to_string(),
         "bazzite" => "Bazzite (rolling)".to_string(),
         "pclinuxos" => "PCLinuxOS".to_string(),
@@ -304,7 +351,8 @@ fn strip_numeric_suffix_local(s: &str) -> Option<&str> {
 
 /// Format a versioned distribution name
 fn format_versioned_distro(full: &str, prefix: &str, display_name: &str) -> String {
-    let version = full.strip_prefix(prefix)
+    let version = full
+        .strip_prefix(prefix)
         .map(|s| s.trim_start_matches('-').trim_start_matches('_'))
         .filter(|s| !s.is_empty());
 
@@ -319,21 +367,33 @@ fn format_bsd_name(id: &str) -> String {
     let id_lower = id.to_lowercase();
 
     if id_lower.contains("freebsd") {
-        let version = id_lower.replace("freebsd", "").replace('-', " ").trim().to_string();
+        let version = id_lower
+            .replace("freebsd", "")
+            .replace('-', " ")
+            .trim()
+            .to_string();
         if version.is_empty() {
             return "FreeBSD".to_string();
         }
         return format!("FreeBSD {}", version);
     }
     if id_lower.contains("openbsd") {
-        let version = id_lower.replace("openbsd", "").replace('-', " ").trim().to_string();
+        let version = id_lower
+            .replace("openbsd", "")
+            .replace('-', " ")
+            .trim()
+            .to_string();
         if version.is_empty() {
             return "OpenBSD".to_string();
         }
         return format!("OpenBSD {}", version);
     }
     if id_lower.contains("netbsd") {
-        let version = id_lower.replace("netbsd", "").replace('-', " ").trim().to_string();
+        let version = id_lower
+            .replace("netbsd", "")
+            .replace('-', " ")
+            .trim()
+            .to_string();
         if version.is_empty() {
             return "NetBSD".to_string();
         }
@@ -361,9 +421,9 @@ fn fallback_title_case(s: &str) -> String {
         .join(" ")
 }
 
-/// Read VM metadata from vm-curator.toml
+/// Read VM metadata from vm-foundry.toml
 fn read_vm_metadata(vm_path: &Path) -> (Option<String>, Option<String>, Option<String>) {
-    let metadata_path = vm_path.join("vm-curator.toml");
+    let metadata_path = vm_path.join("vm-foundry.toml");
 
     if !metadata_path.exists() {
         return (None, None, None);
@@ -445,7 +505,7 @@ fn extract_toml_string_value(line: &str) -> Option<String> {
 
     let value = parts[1].trim();
     if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
-        Some(value[1..value.len()-1].replace("\\\"", "\""))
+        Some(value[1..value.len() - 1].replace("\\\"", "\""))
     } else {
         None
     }
@@ -482,20 +542,17 @@ pub fn discover_vms(library_path: &Path) -> Result<Vec<DiscoveredVm>> {
             .to_string();
 
         // Try to parse the launch script
-        let script_content = std::fs::read_to_string(&launch_script)
-            .unwrap_or_default();
+        let script_content = std::fs::read_to_string(&launch_script).unwrap_or_default();
 
         let config = match parse_launch_script(&launch_script, &script_content) {
             Ok(cfg) => cfg,
-            Err(_) => {
-                QemuConfig {
-                    raw_script: script_content,
-                    ..QemuConfig::default()
-                }
-            }
+            Err(_) => QemuConfig {
+                raw_script: script_content,
+                ..QemuConfig::default()
+            },
         };
 
-        // Read vm-curator.toml metadata if it exists
+        // Read vm-foundry.toml metadata if it exists
         let (custom_name, os_profile, notes) = read_vm_metadata(&path);
 
         vms.push(DiscoveredVm {
@@ -524,7 +581,10 @@ pub fn group_vms_by_category(vms: &[DiscoveredVm]) -> Vec<(&'static str, Vec<&Di
 
     for vm in vms {
         let id_lower = vm.id.to_lowercase();
-        if id_lower.starts_with("windows") || id_lower.contains("dos") || id_lower.starts_with("my-first") {
+        if id_lower.starts_with("windows")
+            || id_lower.contains("dos")
+            || id_lower.starts_with("my-first")
+        {
             windows.push(vm);
         } else if id_lower.starts_with("mac") {
             mac.push(vm);

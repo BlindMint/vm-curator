@@ -95,9 +95,7 @@ pub fn disable_cow(path: &Path) -> Result<()> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Don't fail if chattr isn't available or permission denied
         // Just log and continue - this is an optimization, not critical
-        if !stderr.contains("Operation not supported")
-            && !stderr.contains("Inappropriate ioctl")
-        {
+        if !stderr.contains("Operation not supported") && !stderr.contains("Inappropriate ioctl") {
             anyhow::bail!("chattr +C failed: {}", stderr.trim());
         }
     }
