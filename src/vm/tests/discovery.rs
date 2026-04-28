@@ -12,6 +12,7 @@ fn test_display_name() {
         custom_name: None,
         os_profile: None,
         notes: None,
+        default_boot_mode: BootMode::Normal,
     };
     assert_eq!(vm.display_name(), "Microsoft® Windows 95");
 }
@@ -26,6 +27,7 @@ fn test_custom_display_name() {
         custom_name: Some("CachyOS Gaming Rig".to_string()),
         os_profile: Some("linux-cachyos".to_string()),
         notes: None,
+        default_boot_mode: BootMode::Normal,
     };
     // Custom name takes priority
     assert_eq!(vm.display_name(), "CachyOS Gaming Rig");

@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::CreateWizardState;
+use crate::vm::BootMode;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -92,6 +93,30 @@ fn test_generate_launch_script() {
     assert!(script.contains("--install"));
     assert!(script.contains("--cdrom"));
     assert!(script.contains("--recovery"));
+}
+
+#[test]
+fn test_write_vm_metadata_with_default_boot_mode() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let vm_dir = std::env::temp_dir().join(format!("vm-foundry-boot-mode-{}", unique));
+    fs::create_dir_all(&vm_dir).unwrap();
+
+    write_vm_metadata_with_default_boot_mode(
+        &vm_dir,
+        "Installer VM",
+        Some("linux-parrot"),
+        None,
+        Some(&BootMode::Install),
+    )
+    .unwrap();
+
+    let content = fs::read_to_string(vm_dir.join("vm-foundry.toml")).unwrap();
+    assert!(content.contains("default_boot_mode = \"install\""));
+
+    let _ = fs::remove_dir_all(&vm_dir);
 }
 
 #[test]

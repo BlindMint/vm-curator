@@ -406,8 +406,14 @@ pub fn rename_vm(vm: &DiscoveredVm, new_name: &str) -> Result<()> {
     let os_profile = vm.os_profile.as_deref().or(Some(&vm.id));
     let notes = vm.notes.as_deref();
 
-    crate::vm::create::write_vm_metadata(&vm.path, new_name, os_profile, notes)
-        .context("Failed to write VM metadata")?;
+    crate::vm::create::write_vm_metadata_with_default_boot_mode(
+        &vm.path,
+        new_name,
+        os_profile,
+        notes,
+        Some(&vm.default_boot_mode),
+    )
+    .context("Failed to write VM metadata")?;
 
     Ok(())
 }

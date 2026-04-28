@@ -750,6 +750,7 @@ mod tests {
             custom_name: None,
             os_profile: None,
             notes: None,
+            default_boot_mode: crate::vm::BootMode::Normal,
         };
         let config = Config::default();
         let items = get_menu_items(&vm, &config);

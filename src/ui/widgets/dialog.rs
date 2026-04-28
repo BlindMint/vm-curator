@@ -26,7 +26,11 @@ impl<'a> ConfirmDialog<'a> {
     pub fn render(self, area: Rect, buf: &mut Buffer) {
         // Calculate dialog size
         let dialog_width = 50.min(area.width.saturating_sub(4));
-        let dialog_height = 8.min(area.height.saturating_sub(4));
+        let message_lines = self.message.lines().count() as u16;
+        let dialog_height = message_lines
+            .saturating_add(4)
+            .max(8)
+            .min(area.height.saturating_sub(4));
 
         let dialog_area = centered_rect(dialog_width, dialog_height, area);
 
