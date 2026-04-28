@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 use super::launch_parser::parse_launch_script;
-use super::qemu_config::QemuConfig;
+use super::qemu_config::{BootMode, QemuConfig};
 
 /// A discovered VM in the library
 #[derive(Debug, Clone)]
@@ -21,6 +21,8 @@ pub struct DiscoveredVm {
     pub os_profile: Option<String>,
     /// User notes from vm-foundry.toml (if set)
     pub notes: Option<String>,
+    /// Default boot mode for launch confirmations
+    pub default_boot_mode: BootMode,
 }
 
 impl DiscoveredVm {
@@ -422,22 +424,30 @@ fn fallback_title_case(s: &str) -> String {
 }
 
 /// Read VM metadata from vm-foundry.toml
-fn read_vm_metadata(vm_path: &Path) -> (Option<String>, Option<String>, Option<String>) {
+fn read_vm_metadata(
+    vm_path: &Path,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<BootMode>,
+) {
     let metadata_path = vm_path.join("vm-foundry.toml");
 
     if !metadata_path.exists() {
-        return (None, None, None);
+        return (None, None, None, None);
     }
 
     let content = match std::fs::read_to_string(&metadata_path) {
         Ok(c) => c,
-        Err(_) => return (None, None, None),
+        Err(_) => return (None, None, None, None),
     };
 
     // Simple TOML parsing for our specific keys
     let mut display_name = None;
     let mut os_profile = None;
     let mut notes = None;
+    let mut default_boot_mode = None;
 
     let lines: Vec<&str> = content.lines().collect();
     let mut i = 0;
@@ -450,6 +460,10 @@ fn read_vm_metadata(vm_path: &Path) -> (Option<String>, Option<String>, Option<S
         } else if line.starts_with("os_profile") {
             if let Some(value) = extract_toml_string_value(line) {
                 os_profile = Some(value);
+            }
+        } else if line.starts_with("default_boot_mode") {
+            if let Some(value) = extract_toml_string_value(line) {
+                default_boot_mode = parse_default_boot_mode(&value);
             }
         } else if line.starts_with("notes") {
             // Check for multi-line literal string (notes = '''\n...\n''')
@@ -493,7 +507,15 @@ fn read_vm_metadata(vm_path: &Path) -> (Option<String>, Option<String>, Option<S
         i += 1;
     }
 
-    (display_name, os_profile, notes)
+    (display_name, os_profile, notes, default_boot_mode)
+}
+
+fn parse_default_boot_mode(value: &str) -> Option<BootMode> {
+    match value {
+        "normal" => Some(BootMode::Normal),
+        "install" => Some(BootMode::Install),
+        _ => None,
+    }
 }
 
 /// Extract a string value from a TOML line like: key = "value"
@@ -553,7 +575,7 @@ pub fn discover_vms(library_path: &Path) -> Result<Vec<DiscoveredVm>> {
         };
 
         // Read vm-foundry.toml metadata if it exists
-        let (custom_name, os_profile, notes) = read_vm_metadata(&path);
+        let (custom_name, os_profile, notes, default_boot_mode) = read_vm_metadata(&path);
 
         vms.push(DiscoveredVm {
             id,
@@ -563,6 +585,7 @@ pub fn discover_vms(library_path: &Path) -> Result<Vec<DiscoveredVm>> {
             custom_name,
             os_profile,
             notes,
+            default_boot_mode: default_boot_mode.unwrap_or_default(),
         });
     }
 

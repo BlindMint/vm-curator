@@ -123,6 +123,7 @@ fn handle_main_menu_click(app: &mut App, click_x: u16, click_y: u16) -> Result<(
             ) {
                 // If clicking on already-selected VM, show launch confirmation
                 if visual_idx == app.selected_vm && app.selected_vm().is_some() {
+                    app.prepare_launch_confirmation(None);
                     app.push_screen(Screen::Confirm(ConfirmAction::LaunchVm));
                 } else {
                     // Otherwise, just select the VM
@@ -147,7 +148,18 @@ fn handle_confirm_click(
 
         // Calculate dialog dimensions (same as ConfirmDialog::render)
         let dialog_width = 50.min(area.width.saturating_sub(4));
-        let dialog_height = 8.min(area.height.saturating_sub(4));
+        let message_lines = if matches!(action, ConfirmAction::LaunchVm)
+            && matches!(
+                app.launch_boot_mode_selection,
+                BootMode::Normal | BootMode::Install
+            ) {
+            6
+        } else {
+            1
+        };
+        let dialog_height = (message_lines + 4)
+            .max(8)
+            .min(area.height.saturating_sub(4));
 
         // Calculate centered position
         let dialog_x = area.x + (area.width.saturating_sub(dialog_width)) / 2;
@@ -161,6 +173,24 @@ fn handle_confirm_click(
 
         // Buttons are in the bottom 2 rows of the inner area
         let buttons_y = inner_y + inner_height.saturating_sub(2);
+
+        if matches!(action, ConfirmAction::LaunchVm)
+            && matches!(
+                app.launch_boot_mode_selection,
+                BootMode::Normal | BootMode::Install
+            )
+        {
+            let normal_y = inner_y.saturating_add(2);
+            let install_y = inner_y.saturating_add(3);
+            if click_y == normal_y && click_x >= inner_x && click_x < inner_x + inner_width {
+                app.launch_boot_mode_selection = BootMode::Normal;
+                return Ok(());
+            }
+            if click_y == install_y && click_x >= inner_x && click_x < inner_x + inner_width {
+                app.launch_boot_mode_selection = BootMode::Install;
+                return Ok(());
+            }
+        }
 
         // Check if click is in the buttons row
         if click_y >= buttons_y && click_y < buttons_y + 2 {
@@ -200,7 +230,13 @@ fn execute_confirm_action(app: &mut App, action: ConfirmAction) -> Result<()> {
                 if app.running_vms.contains_key(&vm.id) {
                     app.set_status(format!("{} is already running", vm.display_name()));
                 } else {
-                    let options = app.get_launch_options();
+                    let boot_mode = app.launch_boot_mode_selection.clone();
+                    if let Err(e) = app.save_selected_vm_default_boot_mode(&boot_mode) {
+                        app.set_status(format!("Failed to save launch default: {}", e));
+                        return Ok(());
+                    }
+                    let options = app.launch_options_for_boot_mode(boot_mode);
+                    app.reset_boot_mode();
                     let result = launch_vm_with_error_check(&vm, &options);
 
                     if result.success {
@@ -607,9 +643,11 @@ fn handle_main_menu(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Enter => {
             if app.selected_vm().is_some() {
                 if app.config.confirm_before_launch {
+                    app.prepare_launch_confirmation(None);
                     app.push_screen(Screen::Confirm(ConfirmAction::LaunchVm));
                 } else {
                     // Launch directly without confirmation
+                    app.prepare_launch_confirmation(None);
                     execute_confirm_action(app, ConfirmAction::LaunchVm)?;
                 }
             }
@@ -1362,11 +1400,13 @@ fn handle_boot_options(app: &mut App, key: KeyEvent) -> Result<()> {
             match item {
                 0 => {
                     app.boot_mode = BootMode::Normal;
+                    app.prepare_launch_confirmation(Some(BootMode::Normal));
                     app.pop_screen();
                     app.push_screen(Screen::Confirm(ConfirmAction::LaunchVm));
                 }
                 1 => {
                     app.boot_mode = BootMode::Install;
+                    app.prepare_launch_confirmation(Some(BootMode::Install));
                     app.pop_screen();
                     app.push_screen(Screen::Confirm(ConfirmAction::LaunchVm));
                 }
@@ -1609,6 +1649,25 @@ fn handle_usb_devices(app: &mut App, key: KeyEvent) -> Result<()> {
 fn handle_confirm(app: &mut App, action: ConfirmAction, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Esc | KeyCode::Char('n') => app.pop_screen(),
+        KeyCode::Char('1') if matches!(action, ConfirmAction::LaunchVm) => {
+            app.launch_boot_mode_selection = BootMode::Normal;
+        }
+        KeyCode::Char('2') if matches!(action, ConfirmAction::LaunchVm) => {
+            app.launch_boot_mode_selection = BootMode::Install;
+        }
+        KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('k') | KeyCode::Up
+            if matches!(action, ConfirmAction::LaunchVm)
+                && matches!(
+                    app.launch_boot_mode_selection,
+                    BootMode::Normal | BootMode::Install
+                ) =>
+        {
+            app.launch_boot_mode_selection = match app.launch_boot_mode_selection {
+                BootMode::Normal => BootMode::Install,
+                BootMode::Install => BootMode::Normal,
+                _ => BootMode::Normal,
+            };
+        }
         KeyCode::Char('y') | KeyCode::Enter => {
             execute_confirm_action(app, action)?;
         }
@@ -1672,8 +1731,29 @@ fn render_detailed_info(app: &App, frame: &mut Frame) {
     .render(dialog_area, frame.buffer_mut());
 }
 
+fn boot_mode_label(mode: &BootMode) -> &'static str {
+    match mode {
+        BootMode::Normal => "Normal boot",
+        BootMode::Install => "Install mode",
+        BootMode::Cdrom(_) => "CD-ROM boot",
+        BootMode::Recovery(_) => "Recovery boot",
+        BootMode::Floppy(_) => "Floppy boot",
+        BootMode::Network => "Network boot",
+    }
+}
+
 fn render_confirm(app: &App, action: &ConfirmAction, frame: &mut Frame) {
     use crate::ui::widgets::ConfirmDialog;
+
+    if matches!(action, ConfirmAction::LaunchVm)
+        && matches!(
+            app.launch_boot_mode_selection,
+            BootMode::Normal | BootMode::Install
+        )
+    {
+        render_launch_confirm(app, frame);
+        return;
+    }
 
     let (title, message) = match action {
         ConfirmAction::LaunchVm => {
@@ -1681,7 +1761,14 @@ fn render_confirm(app: &App, action: &ConfirmAction, frame: &mut Frame) {
                 .selected_vm()
                 .map(|vm| vm.display_name())
                 .unwrap_or_else(|| "VM".to_string());
-            ("Launch VM", format!("Launch {}?", name))
+            (
+                "Launch VM",
+                format!(
+                    "Launch {} using {}?",
+                    name,
+                    boot_mode_label(&app.launch_boot_mode_selection)
+                ),
+            )
         }
         ConfirmAction::ResetVm => (
             "Reset VM",
@@ -1730,6 +1817,84 @@ fn render_confirm(app: &App, action: &ConfirmAction, frame: &mut Frame) {
     };
 
     ConfirmDialog::new(title, &message).render(frame.area(), frame.buffer_mut());
+}
+
+fn render_launch_confirm(app: &App, frame: &mut Frame) {
+    let area = frame.area();
+    let dialog_width = 50.min(area.width.saturating_sub(4));
+    let dialog_height = 10.min(area.height.saturating_sub(4));
+    let dialog_area = centered_rect(dialog_width, dialog_height, area);
+    frame.render_widget(Clear, dialog_area);
+
+    let block = Block::default()
+        .title(" Launch VM ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(modal_background()));
+
+    let inner = block.inner(dialog_area);
+    frame.render_widget(block, dialog_area);
+
+    let selected_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let normal_selected = app.launch_boot_mode_selection == BootMode::Normal;
+    let install_selected = app.launch_boot_mode_selection == BootMode::Install;
+
+    let render_option = |frame: &mut Frame, row_y: u16, selected: bool, text: &'static str| {
+        let marker = if selected { ">" } else { "" };
+        let style = if selected {
+            selected_style
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let marker_area = Rect::new(inner.x, row_y, 1.min(inner.width), 1);
+        let label_x = inner.x.saturating_add(3);
+        let label_area = Rect::new(label_x, row_y, inner.width.saturating_sub(3), 1);
+
+        frame.render_widget(
+            Paragraph::new(marker).style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            marker_area,
+        );
+        frame.render_widget(Paragraph::new(text).style(style), label_area);
+    };
+
+    let vm_name = app
+        .selected_vm()
+        .map(|vm| vm.display_name())
+        .unwrap_or_else(|| "VM".to_string());
+
+    frame.render_widget(
+        Paragraph::new(format!("Launch {}?", vm_name)).style(Style::default().fg(Color::White)),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+    render_option(
+        frame,
+        inner.y.saturating_add(2),
+        normal_selected,
+        "1. Normal boot",
+    );
+    render_option(
+        frame,
+        inner.y.saturating_add(3),
+        install_selected,
+        "2. Install mode",
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("[j/k] Change", Style::default().fg(Color::Gray)),
+            Span::raw("  "),
+            Span::styled("[Enter] Launch", Style::default().fg(Color::Green)),
+            Span::raw("  "),
+            Span::styled("[Esc] Cancel", Style::default().fg(Color::Red)),
+        ])),
+        Rect::new(inner.x, inner.y.saturating_add(5), inner.width, 1),
+    );
 }
 
 fn render_usb_devices(app: &App, frame: &mut Frame) {
@@ -1987,6 +2152,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                         } else {
                             // Normal boot mode - selected an ISO file
                             app.boot_mode = BootMode::Cdrom(selected_path);
+                            app.prepare_launch_confirmation(Some(app.boot_mode.clone()));
                             app.pop_screen(); // Close file browser
                             app.pop_screen(); // Close boot options
                             app.push_screen(Screen::Confirm(ConfirmAction::LaunchVm));
@@ -2004,6 +2170,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                         } else {
                             // Boot options mode
                             app.boot_mode = BootMode::Recovery(selected_path);
+                            app.prepare_launch_confirmation(Some(app.boot_mode.clone()));
                             app.pop_screen(); // Close file browser
                             app.pop_screen(); // Close boot options
                             app.push_screen(Screen::Confirm(ConfirmAction::LaunchVm));
@@ -2035,6 +2202,7 @@ fn handle_file_browser(app: &mut App, key: KeyEvent) -> Result<()> {
                         } else {
                             // Boot options mode
                             app.boot_mode = BootMode::Floppy(selected_path);
+                            app.prepare_launch_confirmation(Some(app.boot_mode.clone()));
                             app.pop_screen(); // Close file browser
                             app.pop_screen(); // Close boot options
                             app.push_screen(Screen::Confirm(ConfirmAction::LaunchVm));

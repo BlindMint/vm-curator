@@ -735,6 +735,8 @@ pub struct App {
     pub selected_menu_item: usize,
     /// Current boot mode
     pub boot_mode: BootMode,
+    /// Boot mode currently selected in the launch confirmation modal
+    pub launch_boot_mode_selection: BootMode,
     /// Search query
     pub search_query: String,
     /// Input mode
@@ -976,6 +978,7 @@ impl App {
             multi_gpu_status: None,
             selected_menu_item: 0,
             boot_mode: BootMode::Normal,
+            launch_boot_mode_selection: BootMode::Normal,
             search_query: String::new(),
             input_mode: InputMode::Normal,
             filtered_indices,
@@ -1361,8 +1364,8 @@ impl App {
         }
     }
 
-    /// Get launch options based on current state
-    pub fn get_launch_options(&self) -> LaunchOptions {
+    /// Get launch options for a one-shot boot mode without changing the app default.
+    pub fn launch_options_for_boot_mode(&self, boot_mode: BootMode) -> LaunchOptions {
         let usb_devices = self
             .selected_usb_devices
             .iter()
@@ -1375,10 +1378,58 @@ impl App {
             .collect();
 
         LaunchOptions {
-            boot_mode: self.boot_mode.clone(),
+            boot_mode,
             extra_args: Vec::new(),
             usb_devices,
         }
+    }
+
+    /// Reset future launches to normal boot after a one-shot special boot.
+    pub fn reset_boot_mode(&mut self) {
+        self.boot_mode = BootMode::Normal;
+    }
+
+    /// Initialize the launch confirmation modal from an explicit mode or the VM default.
+    pub fn prepare_launch_confirmation(&mut self, boot_mode: Option<BootMode>) {
+        self.launch_boot_mode_selection = boot_mode.unwrap_or_else(|| {
+            self.selected_vm()
+                .map(|vm| vm.default_boot_mode.clone())
+                .unwrap_or_default()
+        });
+    }
+
+    /// Persist the selected VM's default launch boot mode.
+    pub fn save_selected_vm_default_boot_mode(&mut self, boot_mode: &BootMode) -> Result<()> {
+        if !matches!(boot_mode, BootMode::Normal | BootMode::Install) {
+            return Ok(());
+        }
+
+        let vm = self
+            .selected_vm()
+            .ok_or_else(|| anyhow::anyhow!("No VM selected"))?;
+
+        let vm_path = vm.path.clone();
+        let display_name = vm.display_name();
+        let os_profile = vm.os_profile.clone();
+        let notes = vm.notes.clone();
+
+        crate::vm::create::write_vm_metadata_with_default_boot_mode(
+            &vm_path,
+            &display_name,
+            os_profile.as_deref(),
+            notes.as_deref(),
+            Some(boot_mode),
+        )?;
+
+        if let Some(filtered_idx) = self.visual_order.get(self.selected_vm) {
+            if let Some(actual_idx) = self.filtered_indices.get(*filtered_idx) {
+                if let Some(vm) = self.vms.get_mut(*actual_idx) {
+                    vm.default_boot_mode = boot_mode.clone();
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Set a status message (auto-clears after 5 seconds)
@@ -1519,8 +1570,8 @@ impl App {
 
                     if auto_launch {
                         if let Some(vm) = self.selected_vm().cloned() {
-                            self.boot_mode = boot_mode;
-                            let options = self.get_launch_options();
+                            let options = self.launch_options_for_boot_mode(boot_mode);
+                            self.reset_boot_mode();
                             let tx = self.background_tx.clone();
                             let vm_name_clone = vm_name.clone();
                             self.start_loading(format!("Launching {}...", vm_name));
@@ -1799,6 +1850,7 @@ impl App {
         let vm_path = vm.path.clone();
         let display_name = vm.display_name();
         let os_profile = vm.os_profile.clone();
+        let default_boot_mode = vm.default_boot_mode.clone();
 
         let notes_text = self.script_editor_lines.join("\n");
         // Trim trailing whitespace/newlines
@@ -1809,11 +1861,12 @@ impl App {
             Some(notes_text.as_str())
         };
 
-        crate::vm::create::write_vm_metadata(
+        crate::vm::create::write_vm_metadata_with_default_boot_mode(
             &vm_path,
             &display_name,
             os_profile.as_deref(),
             notes,
+            Some(&default_boot_mode),
         )?;
 
         // Update the in-memory VM's notes

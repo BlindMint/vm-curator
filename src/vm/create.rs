@@ -25,7 +25,7 @@ fn shell_escape(s: &str) -> String {
 
 use crate::app::{CreateWizardState, DiskAction, WizardQemuConfig};
 use crate::commands::qemu_img;
-use crate::vm::qemu_config::{PortForward, PortProtocol};
+use crate::vm::qemu_config::{BootMode, PortForward, PortProtocol};
 
 /// Install media type for QEMU command generation
 pub enum InstallMedia<'a> {
@@ -323,6 +323,17 @@ pub fn write_vm_metadata(
     os_profile: Option<&str>,
     notes: Option<&str>,
 ) -> Result<()> {
+    write_vm_metadata_with_default_boot_mode(vm_dir, display_name, os_profile, notes, None)
+}
+
+/// Write VM metadata file (vm-foundry.toml), including a launch default if provided.
+pub fn write_vm_metadata_with_default_boot_mode(
+    vm_dir: &Path,
+    display_name: &str,
+    os_profile: Option<&str>,
+    notes: Option<&str>,
+    default_boot_mode: Option<&BootMode>,
+) -> Result<()> {
     let metadata_path = vm_dir.join("vm-foundry.toml");
 
     let mut content = String::new();
@@ -334,6 +345,17 @@ pub fn write_vm_metadata(
 
     if let Some(profile) = os_profile {
         content.push_str(&format!("os_profile = \"{}\"\n", profile));
+    }
+
+    if let Some(mode) = default_boot_mode {
+        let value = match mode {
+            BootMode::Normal => Some("normal"),
+            BootMode::Install => Some("install"),
+            _ => None,
+        };
+        if let Some(value) = value {
+            content.push_str(&format!("default_boot_mode = \"{}\"\n", value));
+        }
     }
 
     if let Some(notes_text) = notes {
