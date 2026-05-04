@@ -27,3 +27,5 @@ scripts/
 
 package-lock.json
 .codex
+.agents/
+AGENTS.md
