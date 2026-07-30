@@ -1,6 +1,6 @@
 # vm-foundry
 
-A Rust TUI for managing desktop QEMU/KVM virtual machines with a VM library workflow, guided creation/import, GPU passthrough, networking controls, and a large catalog of pre-configured OS profiles.
+A Rust TUI **QEMU VM manager** for desktop QEMU/KVM virtual machines — library workflow, guided creation/import, GPU passthrough, networking controls, and a large catalog of pre-configured OS profiles.
 
 This repository is maintained as a personal fork under the name **VM Foundry**. Fork-specific fixes and UI changes are tracked in [CHANGELOG.md](./CHANGELOG.md).
 
@@ -44,7 +44,7 @@ This repository is maintained as a personal fork under the name **VM Foundry**. 
 ## Screenshots
 
 ```text
- VM Foundry (QEMU VM Library in ~/vm-space)
+ VM Foundry (QEMU VM Manager · library in ~/vm-space)
 ┌─────────────────────────────────────────────────────────────────────┐
 │ ┌─────────────────────────┐  ┌────────────────────────────────────┐ │
 │ │ VMs (35)                │  │       _    _ _           _        │ │
@@ -68,24 +68,13 @@ This repository is maintained as a personal fork under the name **VM Foundry**. 
 
 ## Installation
 
-### Package Install
+This fork is **not** published on the AUR (that applied to the original upstream project only). Install from source or crates.io.
 
-**AUR (Arch / Arch-derived)**
-
-```bash
-paru -S vm-foundry
-yay -S vm-foundry
-```
-
-**crates.io**
+### crates.io
 
 ```bash
 cargo install vm-foundry
 ```
-
-**Binary Packages**
-
-Pre-built packages (DEB, RPM, AppImage, tarball) can be published from [GitHub Releases](https://github.com/BlindMint/vm-foundry/releases).
 
 ### Build From Source
 
@@ -97,23 +86,23 @@ cargo build --release
 
 The built binary will be at `target/release/vm-foundry`.
 
-### Install a Local Build Safely
+### Install a Local Build
 
-If you already have an installed package, do not overwrite `/usr/bin/vm-foundry` directly. That path is package-managed.
-
-Install your locally built binary to `/usr/local/bin` instead:
+Install your built binary somewhere on your `PATH`, for example:
 
 ```bash
 sudo install -Dm755 target/release/vm-foundry /usr/local/bin/vm-foundry
 ```
-
-That keeps your custom build separate from any package-managed upstream binary while still allowing `/usr/local/bin/vm-foundry` to take precedence on most systems.
 
 To confirm which binary will run:
 
 ```bash
 type -a vm-foundry
 ```
+
+### Binary Packages
+
+Pre-built packages (DEB, RPM, AppImage, tarball) may be published from [GitHub Releases](https://github.com/BlindMint/vm-foundry/releases) when available.
 
 ## Requirements
 
@@ -186,29 +175,23 @@ vm-foundry emulators
 
 ### VM Management
 
+Management is a full-screen master/detail workspace (categories on the left, actions on the right).
+
 | Key | Action |
 |-----|--------|
-| `j/k` or `Down/Up` | Navigate menu |
-| `Enter` | Select menu option |
-| `e` | Edit launch script |
-| `u` | Configure USB passthrough |
+| `j/k` or `Down/Up` | Navigate categories or actions |
+| `Tab` / `l` / `Enter` | Focus the action pane (or open a single action) |
+| `h` / `Esc` | Focus categories, then return to the library |
+| `1-9` | Quick-select an action in the current category |
 
-Management menu options include:
-- Boot options
-- Snapshots
-- USB passthrough
-- PCI passthrough
-- Shared folders
-- Network settings
-- Multi-GPU passthrough
-- Single-GPU passthrough
-- Change display
-- Edit notes
-- Rename VM
-- Stop / force stop
-- Reset VM
-- Delete VM
-- Edit raw configuration
+Categories and options include:
+- **Overview** — config summary, notes, rename
+- **Run** — boot options, display, stop
+- **Network** — backend, adapter, port forwarding
+- **Storage** — snapshots
+- **Shared Folders** — virtio-9p shares
+- **Devices** — USB, PCI, multi/single GPU passthrough
+- **Advanced** — raw `launch.sh`, reset, delete
 
 ### Create Wizard
 

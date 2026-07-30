@@ -25,7 +25,7 @@ use config::Config;
 #[command(name = "vm-foundry")]
 #[command(author = "Mark Roboff")]
 #[command(version)]
-#[command(about = "A TUI application to manage your desktop QEMU VM library")]
+#[command(about = "TUI for managing a desktop QEMU/KVM VM library")]
 struct Cli {
     /// Path to VM library directory
     #[arg(short, long)]
@@ -242,10 +242,12 @@ fn run_tui(config: Config) -> Result<()> {
 }
 
 fn print_loading_header() {
+    // Inner width must match the visible (non-ANSI) content between the side borders:
+    // "   VM Foundry - QEMU VM Manager   " = 34 columns
     println!();
-    println!("\x1b[1;36m╭─────────────────────────────────────╮\x1b[0m");
-    println!("\x1b[1;36m│\x1b[0m    \x1b[1;33mVM Foundry\x1b[0m - QEMU Lab Manager    \x1b[1;36m│\x1b[0m");
-    println!("\x1b[1;36m╰─────────────────────────────────────╯\x1b[0m");
+    println!("\x1b[1;36m╭──────────────────────────────────╮\x1b[0m");
+    println!("\x1b[1;36m│\x1b[0m   \x1b[1;33mVM Foundry\x1b[0m - QEMU VM Manager   \x1b[1;36m│\x1b[0m");
+    println!("\x1b[1;36m╰──────────────────────────────────╯\x1b[0m");
     println!();
 }
 

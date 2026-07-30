@@ -84,7 +84,7 @@ fn render_title(app: &App, area: Rect, frame: &mut Frame) {
 
     let statuses = [
         format!(
-            "{} VMs | {} running | Desktop QEMU Lab Manager | {}",
+            "{} VMs | {} running | QEMU VM Manager | {}",
             app.vms.len(),
             app.running_vms.len(),
             display_path

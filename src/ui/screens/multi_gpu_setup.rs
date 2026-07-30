@@ -252,7 +252,10 @@ fn render_help(frame: &mut Frame, area: Rect) {
 pub fn handle_input(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
     match key.code {
         KeyCode::Esc => {
-            app.selected_menu_item = 0; // Reset for management menu
+            crate::ui::screens::management::focus_action(
+                app,
+                crate::ui::screens::management::MenuAction::MultiGpuPassthrough,
+            );
             app.pop_screen();
         }
         KeyCode::Char('p') | KeyCode::Char('P') => {

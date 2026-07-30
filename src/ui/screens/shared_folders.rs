@@ -256,7 +256,13 @@ pub fn get_mount_tier(app: &App) -> &'static str {
 /// Handle key input for the shared folders screen
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
-        KeyCode::Esc => app.pop_screen(),
+        KeyCode::Esc => {
+            crate::ui::screens::management::focus_action(
+                app,
+                crate::ui::screens::management::MenuAction::SharedFolders,
+            );
+            app.pop_screen();
+        }
         KeyCode::Char('j') | KeyCode::Down => {
             if !app.shared_folders.is_empty()
                 && app.shared_folder_selected < app.shared_folders.len() - 1

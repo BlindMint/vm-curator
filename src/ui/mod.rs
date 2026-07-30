@@ -392,7 +392,12 @@ fn render_modal_over_main<F>(app: &App, frame: &mut Frame, render_modal: F)
 where
     F: FnOnce(&mut Frame),
 {
-    screens::main_menu::render(app, frame);
+    // Prefer the real parent screen as backdrop (e.g. Management workspace)
+    match app.screen_stack.last() {
+        Some(Screen::Management) => screens::management::render(app, frame),
+        Some(Screen::Settings) => screens::settings::render(app, frame),
+        _ => screens::main_menu::render(app, frame),
+    }
     render_dim_overlay(frame);
     render_modal(frame);
 }
@@ -401,9 +406,7 @@ where
 fn render(app: &App, frame: &mut Frame) {
     match &app.screen {
         Screen::MainMenu => screens::main_menu::render(app, frame),
-        Screen::Management => {
-            render_modal_over_main(app, frame, |frame| screens::management::render(app, frame))
-        }
+        Screen::Management => screens::management::render(app, frame),
         Screen::Configuration => render_modal_over_main(app, frame, |frame| {
             screens::configuration::render(app, frame)
         }),
@@ -654,6 +657,7 @@ fn handle_main_menu(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char('m') | KeyCode::Char('M') => {
             if app.selected_vm().is_some() {
+                app.reset_management_nav();
                 app.push_screen(Screen::Management);
             }
         }
@@ -700,186 +704,219 @@ fn handle_main_menu(app: &mut App, key: KeyEvent) -> Result<()> {
 }
 
 fn handle_management(app: &mut App, key: KeyEvent) -> Result<()> {
-    use screens::management::{get_menu_items, menu_item_count, MenuAction};
+    use screens::management::{category_count, detail_item_count, selected_action};
 
-    let item_count = menu_item_count(app);
+    let cat_count = category_count(app);
+    let detail_count = detail_item_count(app);
 
     match key.code {
-        KeyCode::Esc => app.pop_screen(),
-        KeyCode::Char('j') | KeyCode::Down => app.menu_next(item_count),
-        KeyCode::Char('k') | KeyCode::Up => app.menu_prev(),
-        KeyCode::Enter
-        | KeyCode::Char('1')
-        | KeyCode::Char('2')
-        | KeyCode::Char('3')
-        | KeyCode::Char('4')
-        | KeyCode::Char('5')
-        | KeyCode::Char('6')
-        | KeyCode::Char('7')
-        | KeyCode::Char('8')
-        | KeyCode::Char('9') => {
-            // Map number keys to menu index
-            let selected_idx = match key.code {
-                KeyCode::Char('1') => 0,
-                KeyCode::Char('2') => 1,
-                KeyCode::Char('3') => 2,
-                KeyCode::Char('4') => 3,
-                KeyCode::Char('5') => 4,
-                KeyCode::Char('6') => 5,
-                KeyCode::Char('7') => 6,
-                KeyCode::Char('8') => 7,
-                KeyCode::Char('9') => 8,
-                _ => app.selected_menu_item,
-            };
-
-            // Get the menu items and find the action
-            if let Some(vm) = app.selected_vm() {
-                let menu_items = get_menu_items(vm, &app.config);
-                if let Some(item) = menu_items.get(selected_idx) {
-                    match item.action {
-                        MenuAction::StopVm => {
-                            if let Some(vm) = app.selected_vm().cloned() {
-                                if app.selected_vm_pid().is_some() {
-                                    if let Some(sent_at) = app.stopping_vms.get(&vm.id) {
-                                        if sent_at.elapsed() > Duration::from_secs(10) {
-                                            app.push_screen(Screen::Confirm(
-                                                ConfirmAction::ForceStopVm,
-                                            ));
-                                        } else {
-                                            app.set_status(format!(
-                                                "Waiting for {} to shut down...",
-                                                vm.display_name()
-                                            ));
-                                        }
-                                    } else {
-                                        app.push_screen(Screen::Confirm(ConfirmAction::StopVm));
-                                    }
-                                } else {
-                                    app.set_status("VM is not running");
-                                }
-                            }
-                        }
-                        MenuAction::BootOptions => {
-                            app.selected_menu_item = 0;
-                            app.push_screen(Screen::BootOptions);
-                        }
-                        MenuAction::Snapshots => {
-                            app.load_snapshots()?;
-                            app.push_screen(Screen::Snapshots);
-                        }
-                        MenuAction::UsbPassthrough => {
-                            app.load_usb_devices()?;
-                            // Load saved USB passthrough config and pre-select matching devices
-                            if let Some(vm) = app.selected_vm() {
-                                let saved = crate::vm::load_usb_passthrough(vm);
-                                app.selected_usb_devices.clear();
-                                for saved_dev in &saved {
-                                    // Find matching device by vendor/product ID
-                                    for (i, dev) in app.usb_devices.iter().enumerate() {
-                                        if dev.vendor_id == saved_dev.vendor_id
-                                            && dev.product_id == saved_dev.product_id
-                                        {
-                                            app.selected_usb_devices.push(i);
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            app.selected_menu_item = 0;
-                            app.push_screen(Screen::UsbDevices);
-                        }
-                        MenuAction::PciPassthrough => {
-                            app.load_pci_devices()?;
-                            app.restore_pci_selections();
-                            app.selected_menu_item = 0;
-                            app.push_screen(Screen::PciPassthrough);
-                        }
-                        MenuAction::SharedFolders => {
-                            app.load_shared_folders();
-                            app.selected_menu_item = 0;
-                            app.push_screen(Screen::SharedFolders);
-                        }
-                        MenuAction::NetworkSettings => {
-                            // Initialize network settings state from current VM config
-                            if let Some(vm) = app.selected_vm() {
-                                let net = vm.config.network.as_ref();
-                                let model = net
-                                    .map(|n| n.model.clone())
-                                    .unwrap_or_else(|| "e1000".to_string());
-                                let (backend, bridge_name) = net
-                                    .map(|n| match &n.backend {
-                                        crate::vm::qemu_config::NetworkBackend::User => {
-                                            ("user".to_string(), None)
-                                        }
-                                        crate::vm::qemu_config::NetworkBackend::Passt => {
-                                            ("passt".to_string(), None)
-                                        }
-                                        crate::vm::qemu_config::NetworkBackend::Bridge(name) => {
-                                            ("bridge".to_string(), Some(name.clone()))
-                                        }
-                                        crate::vm::qemu_config::NetworkBackend::None => {
-                                            ("none".to_string(), None)
-                                        }
-                                    })
-                                    .unwrap_or_else(|| ("user".to_string(), None));
-                                let port_forwards =
-                                    net.map(|n| n.port_forwards.clone()).unwrap_or_default();
-
-                                app.network_settings_state =
-                                    Some(crate::app::NetworkSettingsState {
-                                        model,
-                                        backend,
-                                        bridge_name,
-                                        port_forwards,
-                                        selected_field: 0,
-                                        editing_port_forwards: false,
-                                        pf_selected: 0,
-                                        adding_pf: None,
-                                    });
-                                app.push_screen(Screen::NetworkSettings);
-                            }
-                        }
-                        MenuAction::MultiGpuPassthrough => {
-                            app.load_pci_devices()?;
-                            app.restore_pci_selections();
-                            app.push_screen(Screen::MultiGpuSetup);
-                        }
-                        MenuAction::SingleGpuPassthrough => {
-                            // Load PCI devices and initialize single GPU config
-                            app.load_pci_devices()?;
-                            screens::single_gpu_setup::init_single_gpu_config(app);
-                            app.single_gpu_selected_field = 0;
-                            app.push_screen(Screen::SingleGpuSetup);
-                        }
-                        MenuAction::ChangeDisplay => {
-                            app.selected_menu_item = 0;
-                            app.push_screen(Screen::DisplayOptions);
-                        }
-                        MenuAction::EditNotes => {
-                            app.load_notes_into_editor();
-                            app.push_screen(Screen::EditNotes);
-                        }
-                        MenuAction::RenameVm => {
-                            if let Some(vm) = app.selected_vm() {
-                                app.text_input_buffer = vm.display_name();
-                            }
-                            app.push_screen(Screen::TextInput(TextInputContext::RenameVm));
-                        }
-                        MenuAction::ResetVm => {
-                            app.push_screen(Screen::Confirm(ConfirmAction::ResetVm));
-                        }
-                        MenuAction::DeleteVm => {
-                            app.push_screen(Screen::Confirm(ConfirmAction::DeleteVm));
-                        }
-                        MenuAction::EditRawConfig => {
-                            app.load_script_into_editor();
-                            app.push_screen(Screen::RawScript);
-                        }
+        KeyCode::Esc => {
+            if app.management_focus_right {
+                app.management_focus_right = false;
+            } else {
+                app.pop_screen();
+            }
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            if app.management_focus_right {
+                app.management_focus_right = false;
+            }
+        }
+        KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => {
+            if !app.management_focus_right && detail_count > 0 {
+                app.management_focus_right = true;
+                app.management_detail = app.management_detail.min(detail_count.saturating_sub(1));
+            }
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if app.management_focus_right {
+                if app.management_detail + 1 < detail_count {
+                    app.management_detail += 1;
+                }
+            } else if app.management_category + 1 < cat_count {
+                app.management_category += 1;
+                app.management_detail = 0;
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if app.management_focus_right {
+                if app.management_detail > 0 {
+                    app.management_detail -= 1;
+                }
+            } else if app.management_category > 0 {
+                app.management_category -= 1;
+                app.management_detail = 0;
+            }
+        }
+        KeyCode::Enter => {
+            if !app.management_focus_right {
+                // Move into the detail pane, or activate immediately if only one action
+                if detail_count == 1 {
+                    app.management_detail = 0;
+                    if let Some(action) = selected_action(app) {
+                        activate_management_action(app, action)?;
                     }
+                } else if detail_count > 0 {
+                    app.management_focus_right = true;
+                    app.management_detail = 0;
+                }
+            } else if let Some(action) = selected_action(app) {
+                activate_management_action(app, action)?;
+            }
+        }
+        // Number keys select detail actions when focus is on the right (or jump+activate)
+        KeyCode::Char(c @ '1'..='9') => {
+            let idx = (c as u8 - b'1') as usize;
+            if idx < detail_count {
+                app.management_detail = idx;
+                app.management_focus_right = true;
+                if let Some(action) = selected_action(app) {
+                    activate_management_action(app, action)?;
                 }
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn activate_management_action(
+    app: &mut App,
+    action: screens::management::MenuAction,
+) -> Result<()> {
+    use screens::management::MenuAction;
+
+    match action {
+        MenuAction::StopVm => {
+            if let Some(vm) = app.selected_vm().cloned() {
+                if app.selected_vm_pid().is_some() {
+                    if let Some(sent_at) = app.stopping_vms.get(&vm.id) {
+                        if sent_at.elapsed() > Duration::from_secs(10) {
+                            app.push_screen(Screen::Confirm(ConfirmAction::ForceStopVm));
+                        } else {
+                            app.set_status(format!(
+                                "Waiting for {} to shut down...",
+                                vm.display_name()
+                            ));
+                        }
+                    } else {
+                        app.push_screen(Screen::Confirm(ConfirmAction::StopVm));
+                    }
+                } else {
+                    app.set_status("VM is not running");
+                }
+            }
+        }
+        MenuAction::BootOptions => {
+            app.selected_menu_item = 0;
+            app.push_screen(Screen::BootOptions);
+        }
+        MenuAction::Snapshots => {
+            app.load_snapshots()?;
+            app.push_screen(Screen::Snapshots);
+        }
+        MenuAction::UsbPassthrough => {
+            app.load_usb_devices()?;
+            if let Some(vm) = app.selected_vm() {
+                let saved = crate::vm::load_usb_passthrough(vm);
+                app.selected_usb_devices.clear();
+                for saved_dev in &saved {
+                    for (i, dev) in app.usb_devices.iter().enumerate() {
+                        if dev.vendor_id == saved_dev.vendor_id
+                            && dev.product_id == saved_dev.product_id
+                        {
+                            app.selected_usb_devices.push(i);
+                            break;
+                        }
+                    }
+                }
+            }
+            app.selected_menu_item = 0;
+            app.push_screen(Screen::UsbDevices);
+        }
+        MenuAction::PciPassthrough => {
+            app.load_pci_devices()?;
+            app.restore_pci_selections();
+            app.selected_menu_item = 0;
+            app.push_screen(Screen::PciPassthrough);
+        }
+        MenuAction::SharedFolders => {
+            app.load_shared_folders();
+            app.selected_menu_item = 0;
+            app.push_screen(Screen::SharedFolders);
+        }
+        MenuAction::NetworkSettings => {
+            if let Some(vm) = app.selected_vm() {
+                let net = vm.config.network.as_ref();
+                let model = net
+                    .map(|n| n.model.clone())
+                    .unwrap_or_else(|| "e1000".to_string());
+                let (backend, bridge_name) = net
+                    .map(|n| match &n.backend {
+                        crate::vm::qemu_config::NetworkBackend::User => {
+                            ("user".to_string(), None)
+                        }
+                        crate::vm::qemu_config::NetworkBackend::Passt => {
+                            ("passt".to_string(), None)
+                        }
+                        crate::vm::qemu_config::NetworkBackend::Bridge(name) => {
+                            ("bridge".to_string(), Some(name.clone()))
+                        }
+                        crate::vm::qemu_config::NetworkBackend::None => {
+                            ("none".to_string(), None)
+                        }
+                    })
+                    .unwrap_or_else(|| ("user".to_string(), None));
+                let port_forwards = net.map(|n| n.port_forwards.clone()).unwrap_or_default();
+
+                app.network_settings_state = Some(crate::app::NetworkSettingsState {
+                    model,
+                    backend,
+                    bridge_name,
+                    port_forwards,
+                    selected_field: 0,
+                    editing_port_forwards: false,
+                    pf_selected: 0,
+                    adding_pf: None,
+                });
+                app.push_screen(Screen::NetworkSettings);
+            }
+        }
+        MenuAction::MultiGpuPassthrough => {
+            app.load_pci_devices()?;
+            app.restore_pci_selections();
+            app.push_screen(Screen::MultiGpuSetup);
+        }
+        MenuAction::SingleGpuPassthrough => {
+            app.load_pci_devices()?;
+            screens::single_gpu_setup::init_single_gpu_config(app);
+            app.single_gpu_selected_field = 0;
+            app.push_screen(Screen::SingleGpuSetup);
+        }
+        MenuAction::ChangeDisplay => {
+            app.selected_menu_item = 0;
+            app.push_screen(Screen::DisplayOptions);
+        }
+        MenuAction::EditNotes => {
+            app.load_notes_into_editor();
+            app.push_screen(Screen::EditNotes);
+        }
+        MenuAction::RenameVm => {
+            if let Some(vm) = app.selected_vm() {
+                app.text_input_buffer = vm.display_name();
+            }
+            app.push_screen(Screen::TextInput(TextInputContext::RenameVm));
+        }
+        MenuAction::ResetVm => {
+            app.push_screen(Screen::Confirm(ConfirmAction::ResetVm));
+        }
+        MenuAction::DeleteVm => {
+            app.push_screen(Screen::Confirm(ConfirmAction::DeleteVm));
+        }
+        MenuAction::EditRawConfig => {
+            app.load_script_into_editor();
+            app.push_screen(Screen::RawScript);
+        }
     }
     Ok(())
 }
@@ -1330,7 +1367,7 @@ fn handle_detailed_info(app: &mut App, key: KeyEvent) -> Result<()> {
 fn handle_snapshots(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Esc => {
-            app.selected_menu_item = 0; // Reset for management menu
+            screens::management::focus_action(app, screens::management::MenuAction::Snapshots);
             app.pop_screen();
         }
         KeyCode::Char('j') | KeyCode::Down => {
@@ -1379,7 +1416,10 @@ fn handle_boot_options(app: &mut App, key: KeyEvent) -> Result<()> {
     use crate::app::FileBrowserMode;
 
     match key.code {
-        KeyCode::Esc => app.pop_screen(),
+        KeyCode::Esc => {
+            screens::management::focus_action(app, screens::management::MenuAction::BootOptions);
+            app.pop_screen();
+        }
         KeyCode::Char('j') | KeyCode::Down => app.menu_next(5),
         KeyCode::Char('k') | KeyCode::Up => app.menu_prev(),
         KeyCode::Enter
@@ -1436,14 +1476,10 @@ fn handle_boot_options(app: &mut App, key: KeyEvent) -> Result<()> {
 fn handle_display_options(app: &mut App, key: KeyEvent) -> Result<()> {
     let display_options = screens::management::get_display_options(app);
     let option_count = display_options.len();
-    let return_index = screens::management::menu_index_for_action(
-        app,
-        screens::management::MenuAction::ChangeDisplay,
-    );
 
     match key.code {
         KeyCode::Esc => {
-            app.selected_menu_item = return_index;
+            screens::management::focus_action(app, screens::management::MenuAction::ChangeDisplay);
             app.pop_screen();
         }
         KeyCode::Char('j') | KeyCode::Down => app.menu_next(option_count),
@@ -1483,7 +1519,10 @@ fn handle_display_options(app: &mut App, key: KeyEvent) -> Result<()> {
                         }
                     }
                 }
-                app.selected_menu_item = return_index;
+                screens::management::focus_action(
+                    app,
+                    screens::management::MenuAction::ChangeDisplay,
+                );
                 app.pop_screen();
             }
         }
@@ -1522,13 +1561,9 @@ fn update_vm_display(script_path: &std::path::Path, new_display: &str) -> Result
 }
 
 fn handle_usb_devices(app: &mut App, key: KeyEvent) -> Result<()> {
-    let return_index = screens::management::menu_index_for_action(
-        app,
-        screens::management::MenuAction::UsbPassthrough,
-    );
     match key.code {
         KeyCode::Esc => {
-            app.selected_menu_item = return_index;
+            screens::management::focus_action(app, screens::management::MenuAction::UsbPassthrough);
             app.pop_screen();
         }
         KeyCode::Char('j') | KeyCode::Down => {

@@ -385,7 +385,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
 
     match key.code {
         KeyCode::Esc => {
-            app.selected_menu_item = 0; // Reset for management menu
+            crate::ui::screens::management::focus_action(
+                app,
+                crate::ui::screens::management::MenuAction::SingleGpuPassthrough,
+            );
             app.pop_screen();
         }
         KeyCode::Up | KeyCode::Char('k') => {

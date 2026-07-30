@@ -46,11 +46,14 @@ pub fn render(frame: &mut Frame) {
             "Long operations show a centered progress box",
         ),
         blank(),
-        section("Management"),
-        key_line("1-9", "Quick-select management and boot/display options"),
+        section("Management (IDE layout)"),
+        key_line("j / k", "Move categories (left) or actions (right)"),
+        key_line("Tab / l / Enter", "Focus the action pane"),
+        key_line("h / Esc", "Back to categories, then library"),
+        key_line("1-9", "Quick-select an action in the current category"),
         key_line(
-            "Sections",
-            "Run, Storage, Devices, Metadata, Advanced, Danger",
+            "Categories",
+            "Overview, Run, Network, Storage, Shared Folders, Devices, Advanced",
         ),
         key_line(
             "Network",

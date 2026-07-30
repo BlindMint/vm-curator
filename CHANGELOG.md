@@ -13,6 +13,9 @@ All notable changes to this fork are documented here. Upstream release history i
 
 ### Changed
 - Rebranded the fork as **VM Foundry** while keeping upstream config and metadata paths for compatibility.
+- README installation: removed AUR instructions (this fork is not on the AUR); document source/crates.io install instead.
+- Replaced the "QEMU Lab Manager" tagline with **QEMU VM Manager** (splash, title bar, CLI about, package metadata).
+- Redesigned VM Management as a full-screen IDE-style master/detail workspace: left categories (Overview, Run, Network, Storage, Shared Folders, Devices, Advanced) and right-pane actions with current values; dialogs remain for boot/display/snapshots and confirmations.
 - Kept footer shortcut hints visible and moved transient notifications into a shared non-intrusive overlay.
 - Added fuzzy OS filtering to the create wizard while keeping category structure visible.
 - Added a shared busy/progress overlay for long-running background operations.

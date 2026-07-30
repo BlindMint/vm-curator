@@ -2,7 +2,7 @@
 name = "vm-foundry"
 version = "0.4.7"
 edition = "2021"
-description = "A TUI application to manage a desktop QEMU VM library"
+description = "TUI for managing a desktop QEMU/KVM VM library"
 authors = ["Mark Roboff"]
 license = "MIT"
 repository = "https://github.com/BlindMint/vm-foundry"
@@ -45,7 +45,7 @@ maintainer = "Mark Roboff"
 copyright = "2026 Mark Roboff"
 license-file = ["LICENSE", "0"]
 extended-description = """
-VM Foundry is a feature-rich TUI application for managing QEMU/KVM virtual machines.
+VM Foundry is a QEMU VM manager TUI for desktop QEMU/KVM virtual machines.
 It provides automatic VM discovery, a 5-step creation wizard with 121 pre-configured
 OS profiles, snapshot management, USB passthrough, and 3D graphics acceleration."""
 depends = "$auto, qemu-system-x86, qemu-utils, bash"

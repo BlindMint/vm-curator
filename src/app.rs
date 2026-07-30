@@ -731,8 +731,14 @@ pub struct App {
     pub shared_folder_selected: usize,
     /// Multi-GPU passthrough status (prerequisites)
     pub multi_gpu_status: Option<MultiGpuPassthroughStatus>,
-    /// Selected management menu item
+    /// Selected management menu item (also used by nested pickers: boot, display, USB, PCI)
     pub selected_menu_item: usize,
+    /// Management workspace: selected category index (left column)
+    pub management_category: usize,
+    /// Management workspace: selected detail/action index (right column)
+    pub management_detail: usize,
+    /// Management workspace: true when keyboard focus is on the right (detail) pane
+    pub management_focus_right: bool,
     /// Current boot mode
     pub boot_mode: BootMode,
     /// Boot mode currently selected in the launch confirmation modal
@@ -977,6 +983,9 @@ impl App {
             shared_folder_selected: 0,
             multi_gpu_status: None,
             selected_menu_item: 0,
+            management_category: 0,
+            management_detail: 0,
+            management_focus_right: false,
             boot_mode: BootMode::Normal,
             launch_boot_mode_selection: BootMode::Normal,
             search_query: String::new(),
@@ -1116,6 +1125,14 @@ impl App {
     pub fn push_screen(&mut self, screen: Screen) {
         self.screen_stack.push(self.screen.clone());
         self.screen = screen;
+        self.selected_menu_item = 0;
+    }
+
+    /// Reset management workspace navigation (call when opening Manage)
+    pub fn reset_management_nav(&mut self) {
+        self.management_category = 0;
+        self.management_detail = 0;
+        self.management_focus_right = false;
         self.selected_menu_item = 0;
     }
 

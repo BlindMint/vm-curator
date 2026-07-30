@@ -534,7 +534,10 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> anyhow::Res
 
     match key.code {
         KeyCode::Esc => {
-            app.selected_menu_item = 0; // Reset for management menu
+            crate::ui::screens::management::focus_action(
+                app,
+                crate::ui::screens::management::MenuAction::PciPassthrough,
+            );
             app.pop_screen();
         }
         KeyCode::Char('j') | KeyCode::Down => {
